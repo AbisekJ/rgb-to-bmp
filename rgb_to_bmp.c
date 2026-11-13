@@ -14,14 +14,14 @@ typedef struct {
 
 typedef struct {
 	uint32_t bi_size;
-	uint32_t  bi_width;
+	uint32_t bi_width;
 	int32_t  bi_height;
 	uint16_t bi_planes;
 	uint16_t bi_bit_count;
 	uint32_t bi_compression;
 	uint32_t bi_size_image;
-	uint32_t  bi_x_pels_per_meter;
-	uint32_t  bi_y_pels_per_meter;
+	uint32_t bi_x_pels_per_meter;
+	uint32_t bi_y_pels_per_meter;
 	uint32_t bi_clr_used;
 	uint32_t bi_clr_important;
 } bitmap_info_header;
@@ -38,7 +38,47 @@ int main(int argc, char *argv[]) {
 	int image_height = atoi(argv[3]);
 	char *output_path = argv[4];
 
+	//input validation
+	if (image_width <= 0 || image_height <= 0) {
+		fprintf(stderr, "Error: Image width (%d) and height (%d) must be strictly positive integers.\n", 
+			image_width, image_height);
+		return 1;
+	}
+
 	printf("=> Target Image: %dx%d\n", image_width, image_height);
+
+	FILE *input_file = fopen(input_path, "rb");
+	if (!input_file) {
+		perror("Failed to open raw input file");
+		return 1;
+	}
+
+	if (fseek(input_file, 0, SEEK_END) != 0) {
+		perror("Failed to seek input file");
+		fclose(input_file);
+		return 1;
+	}
+
+	long actual_file_size = ftell(input_file);
+	if (actual_file_size < 0) {
+		perror("Failed to get input file size");
+		fclose(input_file);
+		return 1;
+	}
+
+	// Rewind file pointer back to the beginning for reading
+	rewind(input_file);
+
+	size_t expected_raw_size = (size_t)image_width * image_height * 3;
+	if ((size_t)actual_file_size != expected_raw_size) {
+		fprintf(stderr, "Error: Input file size mismatch!\n");
+		fprintf(stderr, "       Expected: %zu bytes (%dx%d pixels * 3 channels)\n", 
+			expected_raw_size, image_width, image_height);
+		fprintf(stderr, "       Actual:   %ld bytes on disk\n", actual_file_size);
+		fclose(input_file);
+		return 1;
+	}
+	
 
 	
 	uint32_t row_stride = ((image_width * 24 + 31) / 32) * 4;
@@ -50,7 +90,7 @@ int main(int argc, char *argv[]) {
 	printf("=> Total File Size:       %u bytes\n", total_file_size);
 
 	bitmap_file_header file_header;
-	file_header.bf_type = 0x4D42; // "BM"
+	file_header.bf_type = 0x4D42;          // "BM"
 	file_header.bf_size = total_file_size;
 	file_header.bf_reserved_1 = 0;
 	file_header.bf_reserved_2 = 0;
@@ -69,13 +109,13 @@ int main(int argc, char *argv[]) {
 	info_header.bi_clr_used = 0;
 	info_header.bi_clr_important = 0;
 	
-
+/*
 	FILE *input_file = fopen(input_path, "rb");
 	if (!input_file) {
 		perror("Failed to open raw input file");
 		return 1;
 	}
-
+*/
 	FILE *output_file = fopen(output_path, "wb");
 	if (!output_file) {
 		perror("Failed to create BMP output file");
