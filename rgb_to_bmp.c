@@ -54,18 +54,24 @@ void load_bmp_headers(int image_width, int image_height, uint32_t pixel_array_si
 	info_header->bi_bit_count = 24;
 	info_header->bi_compression = 0; // uncompressed
 	info_header->bi_size_image = pixel_array_size;
-	info_header->bi_x_pels_per_meter = 0;
-	info_header->bi_y_pels_per_meter = 0;
+	info_header->bi_x_pels_per_meter = 2835;
+	info_header->bi_y_pels_per_meter = 2835;
 	info_header->bi_clr_used = 0;
 	info_header->bi_clr_important = 0;
 }
 
 // Pixel Transformation & Stride Padding Logic 
 int convert_rgb888_to_bmp_buffer(const unsigned char *raw_input_buffer, int image_width, int image_height, int row_stride, unsigned char *bmp_pixel_buffer) {
+	int abs_height = image_height < 0 ? -image_height : image_height;
 	
-	printf("STATUS : Starting RGB888 to BGR transformation and bottom-up row mapping...\n");
-	for (int y = 0; y < image_height; y++) {
-		int target_row_index = image_height - 1 - y;
+	if (image_height<0) {
+		printf("STATUS : Mode detected: TOP-DOWN orientation (height is negative).\n");
+	} else {
+		printf("STATUS : Mode detected: BOTTOM-UP orientation (height is positive).\n");
+	}
+	printf("STATUS : Starting RGB888 to BGR transformation and respective orientation mapping...\n");
+	for (int y = 0; y < abs_height; y++) {
+		int target_row_index = (image_height<0)? y : (abs_height - 1 - y);
 
 		const unsigned char *input_row_ptr = raw_input_buffer + (y * image_width * 3);
 		unsigned char *output_row_ptr = bmp_pixel_buffer + (target_row_index * row_stride);
@@ -84,6 +90,28 @@ int convert_rgb888_to_bmp_buffer(const unsigned char *raw_input_buffer, int imag
 	
 	printf("STATUS : Pixel color channel transformation and row padding completed successfully.\n");
 	return 0;
+}
+
+// File extension validation helper
+int validate_file_extension(const char *filename, const char *expected_ext) {
+	size_t filename_len = strlen(filename);
+	size_t ext_len = strlen(expected_ext);
+	
+	if (filename_len < ext_len) {
+		return 0;
+	}
+
+	const char *file_ext = filename + filename_len - ext_len;
+
+	// Case-insensitive comparison of the file extension suffix
+	for (size_t i = 0; i < ext_len; i++) {
+		char c1 = file_ext[i];
+		char c2 = expected_ext[i];
+		if (c1 != c2) {
+			return 0;
+		}
+	}
+	return 1;
 }
 
 
@@ -115,15 +143,28 @@ int main(int argc, char *argv[]) {
 	int image_height = atoi(argv[3]);
 	char *output_path = argv[4];
 
+	// File Extension Validation
+	printf("STATUS : Validating file extensions (.rgb and .bmp)...\n");
+	if (!validate_file_extension(input_path, ".rgb")) {
+		fprintf(stderr, "Error: Input file '%s' must have a '.rgb' extension.\n", input_path);
+		return 1;
+	}
+	if (!validate_file_extension(output_path, ".bmp")) {
+		fprintf(stderr, "Error: Output file '%s' must have a '.bmp' extension.\n", output_path);
+		return 1;
+	}
+	printf("STATUS : File extensions validated successfully.\n");
+	
+	
 	// input validation
 	printf("STATUS : Validating image dimension parameters...\n");
-	if (image_width <= 0 || image_height <= 0) {
+	if (image_width <= 0 || image_height == 0) {
 		fprintf(stderr, "Error: Image width (%d) and height (%d) must be strictly positive integers.\n", 
 			image_width, image_height);
 		return 1;
 	}
-
-	printf("STATUS : Dimensions validated: %dx%d pixels.\n", image_width, image_height);
+	int abs_height = image_height < 0 ? -image_height : image_height;
+	printf("STATUS : Dimensions validated: %dx%d pixels.\n", image_width, abs_height);
 
 	printf("\nDisplaying Execution Configuration:\n");
 	printf("    - Input File:  %s\n", input_path);
@@ -154,7 +195,7 @@ int main(int argc, char *argv[]) {
 	rewind(input_file);
 
 
-	size_t expected_raw_size = (size_t)image_width * image_height * 3;
+	size_t expected_raw_size = (size_t)image_width * abs_height * 3;
 	if ((size_t)actual_file_size != expected_raw_size) {
 		fprintf(stderr, "Error: Input file size mismatch!\n");
 		fprintf(stderr, "       Expected: %zu bytes (%dx%d pixels * 3 channels)\n", expected_raw_size, image_width, image_height);
@@ -165,7 +206,7 @@ int main(int argc, char *argv[]) {
 	printf("STATUS : File size verified: %ld bytes matches expected RGB888 payload %ld bytes.\n", actual_file_size, expected_raw_size);
 	
 	uint32_t row_stride = calculate_row_stride(image_width);
-	uint32_t pixel_array_size = row_stride * image_height;
+	uint32_t pixel_array_size = row_stride * abs_height;
 
 	bitmap_file_header file_header;
 	bitmap_info_header info_header;
