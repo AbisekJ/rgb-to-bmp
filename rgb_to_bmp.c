@@ -132,8 +132,16 @@ int main(int argc, char *argv[]) {
 		}
 		// Any remaining bytes in output_row_ptr up to row_stride are automatically zero-initialized by calloc().
 	}
-
-	printf("^_^ Step 4 complete: Pixels transformed (RGB->BGR), padded, and reordered.\n");
+	
+	size_t pixels_written = fwrite(bmp_pixel_buffer, 1, pixel_array_size, output_file);
+	
+	if (pixels_written != pixel_array_size) {
+		fprintf(stderr, "Error: Wrote %zu bytes, but expected %u bytes.\n", pixels_written, pixel_array_size);
+	} 
+	
+	else {
+		printf("^_^ : Step 5 complete: Pixel array successfully written to %s (%u bytes).\n", output_path, pixel_array_size);
+	}
 	
 	// Clean up
 	free(raw_input_buffer);
