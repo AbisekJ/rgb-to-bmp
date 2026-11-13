@@ -4,6 +4,31 @@
 #include <string.h>
 #include "bmp_converter.h"
 
+
+
+
+void print_banner(void) {
+	printf("====================================================================\n");
+	printf("  RGB888 to 24-bit Uncompressed BMP Converter (v1)\n");
+	printf("====================================================================\n");
+}
+
+void print_help(const char *program_name) {
+	printf("Usage:\n");
+	printf("  %s <input.rgb> <width> <height> <output.bmp>\n", program_name);
+	printf("  %s --help\n", program_name);
+	printf("  %s --version\n\n", program_name);
+	printf("Description:\n");
+	printf("  Converts a raw, uncompressed RGB888 byte stream into a standard\n");
+	printf("  24-bit Device-Independent Bitmap (BMP). Automatically handles\n");
+	printf("  RGB-to-BGR channel transformation, 4-byte row stride padding, and\n");
+	printf("  bottom-up row orientation mapping.\n");
+}
+
+void print_version(void) {
+	printf("rgb_to_bmp version 1\n");
+}
+
 // Stride Calculation Logic ---
 int calculate_row_stride(int image_width) {
 	return ((image_width * 24 + 31) / 32) * 4;
@@ -58,11 +83,28 @@ int convert_rgb888_to_bmp_buffer(const unsigned char *raw_input_buffer, int imag
 
 
 int main(int argc, char *argv[]) {
+        // Check for help or version flags before strict argument count validation
+	if (argc == 2) {
+		if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
+			print_banner();
+			print_help(argv[0]);
+			return 0;
+		}
+		if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0) {
+			print_banner();
+			print_version();
+			return 0;
+		}
+	}
+
 	if (argc != 5) {
-		fprintf(stderr, "Usage: %s <input.rgb> <width> <height> <output.bmp>\n", argv[0]);
+		fprintf(stderr, "Error: Invalid argument count.\n");
+		fprintf(stderr, "Try '%s --help' for usage instructions.\n", argv[0]);
 		return 1;
 	}
 
+	print_banner();
+	
 	char *input_path = argv[1];
 	int image_width = atoi(argv[2]);
 	int image_height = atoi(argv[3]);
