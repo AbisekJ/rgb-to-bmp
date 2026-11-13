@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <string.h>
 
 #pragma pack(push, 1)
 typedef struct {
@@ -39,6 +40,7 @@ int main(int argc, char *argv[]) {
 
 	printf("=> Target Image: %dx%d\n", image_width, image_height);
 
+	
 	uint32_t row_stride = ((image_width * 24 + 31) / 32) * 4;
 	uint32_t pixel_array_size = row_stride * image_height;
 	uint32_t header_size = sizeof(bitmap_file_header) + sizeof(bitmap_info_header); // 54 bytes
@@ -66,7 +68,7 @@ int main(int argc, char *argv[]) {
 	info_header.bi_y_pels_per_meter = 0;
 	info_header.bi_clr_used = 0;
 	info_header.bi_clr_important = 0;
-
+	
 
 	FILE *input_file = fopen(input_path, "rb");
 	if (!input_file) {
@@ -86,7 +88,7 @@ int main(int argc, char *argv[]) {
 	fwrite(&info_header, sizeof(bitmap_info_header), 1, output_file);
 
 
-	size_t raw_input_size = (size_t)image_width * image_height * 3; 
+	size_t raw_input_size = (size_t)image_width * image_height * 3;
 	unsigned char *raw_input_buffer = malloc(raw_input_size);
 	if (!raw_input_buffer) {
 		perror("Failed to allocate memory for raw input buffer");
@@ -100,10 +102,42 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "Warning: Expected %zu bytes from raw file, but read %zu bytes.\n", raw_input_size, bytes_read);
 	}
 
-	printf("^_^ : Step 3 complete: Raw input buffer allocated and loaded into memory (%zu bytes).\n", bytes_read);
+	// Transform RGB to BGR, Pad Rows, and Handle Bottom-Up Order 
+	// Allocate buffer for the final BMP pixel array (includes stride padding)
+	unsigned char *bmp_pixel_buffer = calloc(1, pixel_array_size); 
+	if (!bmp_pixel_buffer) {
+		perror("Failed to allocate memory for BMP pixel buffer");
+		free(raw_input_buffer);
+		fclose(input_file);
+		fclose(output_file);
+		return 1;
+	}
 
+	for (int y = 0; y < image_height; y++) {
+		// Map top-down input row to bottom-up BMP output row
+		int target_row_index = image_height - 1 - y;
+
+		unsigned char *input_row_ptr = raw_input_buffer + (y * image_width * 3);
+		unsigned char *output_row_ptr = bmp_pixel_buffer + (target_row_index * row_stride);
+
+		for (int x = 0; x < image_width; x++) {
+			unsigned char red_channel   = input_row_ptr[x * 3 + 0];
+			unsigned char green_channel = input_row_ptr[x * 3 + 1];
+			unsigned char blue_channel  = input_row_ptr[x * 3 + 2];
+
+			// Write in BGR order into the padded output row buffer
+			output_row_ptr[x * 3 + 0] = blue_channel;
+			output_row_ptr[x * 3 + 1] = green_channel;
+			output_row_ptr[x * 3 + 2] = red_channel;
+		}
+		// Any remaining bytes in output_row_ptr up to row_stride are automatically zero-initialized by calloc().
+	}
+
+	printf("^_^ Step 4 complete: Pixels transformed (RGB->BGR), padded, and reordered.\n");
+	
 	// Clean up
 	free(raw_input_buffer);
+	free(bmp_pixel_buffer);
 	fclose(input_file);
 	fclose(output_file);
 	return 0;
