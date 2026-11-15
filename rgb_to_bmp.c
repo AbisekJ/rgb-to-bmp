@@ -1307,7 +1307,254 @@ void handle_image_rotation(void) {
 	printf("\n^_^ %d-degree %s rotation completed successfully! Saved to: %s ^_^\n", angle, (dir_flag == 'c') ? "Clockwise" : "Anticlockwise", output_path);
 }
 
+// feature 7 - cropping
+void handle_image_cropping(void) {
+	char input_path[256];
+	char output_path[256];
+	int start_x = 0;
+	int start_y = 0;
+	int crop_width = 0;
+	int crop_height = 0;
 
+	printf("\n--- Feature 7: Bounding-Box Cropping ---\n");
+
+	// 1. Input Path Validation
+	int attempts = 3;
+	int valid = 0;
+	while (attempts > 0 && !valid) {
+		if (!read_strict_string("Enter input .bmp file path", input_path, sizeof(input_path), attempts)) {
+			break;
+		}
+		attempts--;
+
+		if (!validate_file_extension(input_path, ".bmp")) {
+			printf("[ERROR] Input file must have a '.bmp' extension.\n");
+			continue;
+		}
+
+		FILE *test_file = fopen(input_path, "rb");
+		if (!test_file) {
+			printf("[ERROR] Failed to open input file '%s'.\n", input_path);
+			continue;
+		}
+		fclose(test_file);
+		valid = 1;
+	}
+	if (!valid) return;
+
+	// Open temporarily to read dimensions for boundary validation
+	FILE *input_file = fopen(input_path, "rb");
+	if (!input_file) {
+		perror("Failed to open input BMP");
+		return;
+	}
+
+	bitmap_file_header file_header;
+	bitmap_info_header info_header;
+
+	fread(&file_header, sizeof(bitmap_file_header), 1, input_file);
+	fread(&info_header, sizeof(bitmap_info_header), 1, input_file);
+
+	if (file_header.bf_type != 0x4D42 || info_header.bi_bit_count != 24 || info_header.bi_compression != 0) {
+		fprintf(stderr, "[ERROR] Unsupported or invalid 24-bit uncompressed BMP file.\n");
+		fclose(input_file);
+		return;
+	}
+
+	int src_width = info_header.bi_width;
+	int raw_height = info_header.bi_height;
+	int src_height = raw_height < 0 ? -raw_height : raw_height;
+
+	printf("[INFO] Source Image Dimensions: Width = %d, Height = %d\n", src_width, src_height);
+
+	// 2. Crop Start X Coordinate Validation
+	attempts = 3;
+	valid = 0;
+	while (attempts > 0 && !valid) {
+		if (!read_strict_int("Enter starting X coordinate (0 to width-1)", &start_x, attempts)) {
+			break;
+		}
+		attempts--;
+
+		if (start_x < 0 || start_x >= src_width) {
+			printf("[ERROR] Start X (%d) is out of bounds [0, %d].\n", start_x, src_width - 1);
+			continue;
+		}
+		valid = 1;
+	}
+	if (!valid) { fclose(input_file); return; }
+
+	// 3. Crop Start Y Coordinate Validation
+	attempts = 3;
+	valid = 0;
+	while (attempts > 0 && !valid) {
+		if (!read_strict_int("Enter starting Y coordinate (0 to height-1)", &start_y, attempts)) {
+			break;
+		}
+		attempts--;
+
+		if (start_y < 0 || start_y >= src_height) {
+			printf("[ERROR] Start Y (%d) is out of bounds [0, %d].\n", start_y, src_height - 1);
+			continue;
+		}
+		valid = 1;
+	}
+	if (!valid) { fclose(input_file); return; }
+
+	// 4. Crop Width Validation
+	attempts = 3;
+	valid = 0;
+	while (attempts > 0 && !valid) {
+		if (!read_strict_int("Enter crop width (must fit within remaining bounds)", &crop_width, attempts)) {
+			break;
+		}
+		attempts--;
+
+		if (crop_width <= 0 || (start_x + crop_width) > src_width) {
+			printf("[ERROR] Invalid width. Must be > 0 and start_x + width <= %d (Max available: %d).\n", 
+				src_width, src_width - start_x);
+			continue;
+		}
+		valid = 1;
+	}
+	if (!valid) { fclose(input_file); return; }
+
+	// 5. Crop Height Validation
+	attempts = 3;
+	valid = 0;
+	while (attempts > 0 && !valid) {
+		if (!read_strict_int("Enter crop height (must fit within remaining bounds)", &crop_height, attempts)) {
+			break;
+		}
+		attempts--;
+
+		if (crop_height <= 0 || (start_y + crop_height) > src_height) {
+			printf("[ERROR] Invalid height. Must be > 0 and start_y + height <= %d (Max available: %d).\n", 
+				src_height, src_height - start_y);
+			continue;
+		}
+		valid = 1;
+	}
+	if (!valid) { fclose(input_file); return; }
+
+	// 6. Output Path & Overwrite Validation
+	attempts = 3;
+	valid = 0;
+	while (attempts > 0 && !valid) {
+		if (!read_strict_string("Enter output .bmp file path", output_path, sizeof(output_path), attempts)) {
+			break;
+		}
+		attempts--;
+
+		if (!validate_file_extension(output_path, ".bmp")) {
+			printf("[ERROR] Output file must have a '.bmp' extension.\n");
+			continue;
+		}
+
+		FILE *existing = fopen(output_path, "rb");
+		if (existing) {
+			fclose(existing);
+			int confirm = get_strict_overwrite_confirmation(output_path);
+			if (confirm == 1) {
+				valid = 1;
+			} else if (confirm == 0) {
+				continue;
+			} else {
+				fclose(input_file);
+				return;
+			}
+		} else {
+			valid = 1;
+		}
+	}
+	if (!valid) { fclose(input_file); return; }
+
+	// Preserve extra header bytes
+	long extra_header_bytes_count = (long)file_header.bf_off_bits - 54;
+	unsigned char *extra_header_buffer = NULL;
+	if (extra_header_bytes_count > 0) {
+		extra_header_buffer = malloc(extra_header_bytes_count);
+		if (extra_header_buffer) {
+			fread(extra_header_buffer, 1, extra_header_bytes_count, input_file);
+		}
+	}
+
+	int src_row_stride = ((src_width * 24 + 31) / 32) * 4;
+	uint32_t src_pixel_array_size = src_row_stride * src_height;
+
+	unsigned char *src_pixels = malloc(src_pixel_array_size);
+	if (!src_pixels) {
+		perror("Memory allocation failed");
+		free(extra_header_buffer);
+		fclose(input_file);
+		return;
+	}
+
+	fseek(input_file, file_header.bf_off_bits, SEEK_SET);
+	fread(src_pixels, 1, src_pixel_array_size, input_file);
+	fclose(input_file);
+
+	// Setup destination crop buffer with correct stride
+	int dst_row_stride = ((crop_width * 24 + 31) / 32) * 4;
+	uint32_t dst_pixel_array_size = dst_row_stride * crop_height;
+
+	unsigned char *dst_pixels = calloc(1, dst_pixel_array_size);
+	if (!dst_pixels) {
+		perror("Destination memory allocation failed");
+		free(src_pixels);
+		free(extra_header_buffer);
+		return;
+	}
+
+	printf("STATUS : Extracting bounding box region (%d,%d to %d,%d)...\n", 
+		start_x, start_y, start_x + crop_width, start_y + crop_height);
+
+	for (int y = 0; y < crop_height; y++) {
+		int src_y = start_y + y;
+		unsigned char *src_row_ptr = src_pixels + (src_y * src_row_stride);
+		unsigned char *dst_row_ptr = dst_pixels + (y * dst_row_stride);
+
+		for (int x = 0; x < crop_width; x++) {
+			int src_x = start_x + x;
+			unsigned char *src_pixel = src_row_ptr + (src_x * 3);
+			unsigned char *dst_pixel = dst_row_ptr + (x * 3);
+
+			dst_pixel[0] = src_pixel[0]; // Blue
+			dst_pixel[1] = src_pixel[1]; // Green
+			dst_pixel[2] = src_pixel[2]; // Red
+		}
+	}
+
+	// Update headers for cropped image
+	info_header.bi_width = crop_width;
+	info_header.bi_height = crop_height; // Standard bottom-up positive height
+	info_header.bi_size_image = dst_pixel_array_size;
+	file_header.bf_size = file_header.bf_off_bits + dst_pixel_array_size;
+
+	printf("STATUS : Creating cropped output BMP file '%s'...\n", output_path);
+	FILE *output_file = fopen(output_path, "wb");
+	if (!output_file) {
+		perror("Failed to create output file");
+		free(src_pixels);
+		free(dst_pixels);
+		free(extra_header_buffer);
+		return;
+	}
+
+	fwrite(&file_header, sizeof(bitmap_file_header), 1, output_file);
+	fwrite(&info_header, sizeof(bitmap_info_header), 1, output_file);
+	if (extra_header_bytes_count > 0 && extra_header_buffer != NULL) {
+		fwrite(extra_header_buffer, 1, extra_header_bytes_count, output_file);
+	}
+	fwrite(dst_pixels, 1, dst_pixel_array_size, output_file);
+
+	fclose(output_file);
+	free(src_pixels);
+	free(dst_pixels);
+	free(extra_header_buffer);
+
+	printf("\n^_^ Bounding-box cropping completed successfully! Saved to: %s ^_^\n", output_path);
+}
 // menu 
 void run_interactive_menu(void) {
 	int choice;
@@ -1319,7 +1566,8 @@ void run_interactive_menu(void) {
 		printf("  [3] Validate BMP File \n");
 		printf("  [4] Vertical Flip \n");
 		printf("  [5] Mirror Image \n");
-		printf("  [6] Rotate\n");
+		printf("  [6] Rotate Image\n");
+		printf("  [7] Crop Image\n");
 		printf("  [0] Exit Toolkit\n");
 		printf("\nEnter your choice [0-5]: ");
 		
@@ -1356,6 +1604,9 @@ void run_interactive_menu(void) {
 				break;
 			case 6:
 				handle_image_rotation();
+				break;
+			case 7:
+				handle_image_cropping();
 				break;
 			case 0:
 				printf("\nExiting toolkit. Goodbye!\n");
