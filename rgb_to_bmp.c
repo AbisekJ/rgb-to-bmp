@@ -221,9 +221,9 @@ int get_strict_overwrite_confirmation(const char *filepath) {
 		int parsed = sscanf(buffer, " %c %s", &choice, extra_token);
 		if (parsed == 1) {
 			if (choice == 'y' || choice == 'Y') {
-				return 1; // Confirmed overwrite
+				return 1;
 			} else if (choice == 'n' || choice == 'N') {
-				return 0; // Denied overwrite
+				return 0;
 			} else {
 				printf("[ERROR] Invalid response '%c'. Please enter 'y' or 'n' only.\n", choice);
 				attempts--;
@@ -233,7 +233,7 @@ int get_strict_overwrite_confirmation(const char *filepath) {
 			attempts--;
 		}
 	}
-	return -1; // Max retry attempts exhausted
+	return -1;
 }
 
 // feature 1 - rgb to bmp
@@ -245,7 +245,6 @@ void handle_rgb_to_bmp_conversion(void) {
 
 	printf("\n--- Feature 1: Raw RGB888 to 24-bit BMP Conversion ---\n");
 
-	// 1. Strict Input File Path Validation
 	int valid_input = 0;
 	int attempts = 3;
 	while (attempts > 0 && !valid_input) {
@@ -272,7 +271,6 @@ void handle_rgb_to_bmp_conversion(void) {
 		return;
 	}
 
-	// 2. Strict Image Width Validation
 	int valid_width = 0;
 	attempts = 3;
 	while (attempts > 0 && !valid_width) {
@@ -292,7 +290,6 @@ void handle_rgb_to_bmp_conversion(void) {
 		return;
 	}
 
-	// 3. Strict Image Height Validation
 	int valid_height = 0;
 	attempts = 3;
 	while (attempts > 0 && !valid_height) {
@@ -312,7 +309,6 @@ void handle_rgb_to_bmp_conversion(void) {
 		return;
 	}
 
-	// 4. Strict Output File Path & Overwrite Protection Validation
 	int valid_output = 0;
 	attempts = 3;
 	while (attempts > 0 && !valid_output) {
@@ -326,16 +322,15 @@ void handle_rgb_to_bmp_conversion(void) {
 			continue;
 		}
 
-		// Check if file already exists
 		FILE *existing_file = fopen(output_path, "rb");
 		if (existing_file) {
 			fclose(existing_file);
 			int confirm = get_strict_overwrite_confirmation(output_path);
 			if (confirm == 1) {
-				valid_output = 1; // Proceed with overwrite
+				valid_output = 1;
 			} else if (confirm == 0) {
 				printf("[INFO] Overwrite declined. Please provide a different output file path.\n");
-				continue; // Re-prompt output path
+				continue;
 			} else {
 				printf("[ABORT] Maximum retry attempts reached for overwrite confirmation. Returning to menu.\n");
 				return;
@@ -354,11 +349,10 @@ void handle_rgb_to_bmp_conversion(void) {
 	printf("STATUS : Dimensions validated: Width = %d, Height = %d (Absolute = %d).\n", 
 		image_width, image_height, abs_height);
 
-	printf("\n==> Execution Configuration:\n");
+	printf("\n[*] Execution Configuration:\n");
 	printf("    - Input File:  %s\n", input_path);
 	printf("    - Output File: %s\n\n", output_path);
 
-	// Open Input File
 	printf("STATUS : Opening raw input file '%s' in binary read mode...\n", input_path);
 	FILE *input_file = fopen(input_path, "rb");
 	if (!input_file) {
@@ -367,7 +361,6 @@ void handle_rgb_to_bmp_conversion(void) {
 	}
 	printf("STATUS : Input file opened successfully!\n");
 
-	// Verify File Size on Disk
 	printf("STATUS : Verifying input file size on disk...\n");
 	if (fseek(input_file, 0, SEEK_END) != 0) {
 		perror("Failed to seek input file");
@@ -394,7 +387,6 @@ void handle_rgb_to_bmp_conversion(void) {
 	}
 	printf("STATUS : File size verified: %ld bytes matches expected RGB888 payload.\n", actual_file_size);
 
-	// Calculate Stride and Sizes
 	uint32_t row_stride = calculate_row_stride(image_width);
 	uint32_t pixel_array_size = row_stride * abs_height;
 
@@ -403,7 +395,6 @@ void handle_rgb_to_bmp_conversion(void) {
 	
 	load_bmp_headers(image_width, image_height, pixel_array_size, &file_header, &info_header);
 
-	// Create Output File
 	printf("STATUS : Creating output BMP file '%s' in binary write mode...\n", output_path);
 	FILE *output_file = fopen(output_path, "wb");
 	if (!output_file) {
@@ -413,13 +404,11 @@ void handle_rgb_to_bmp_conversion(void) {
 	}
 	printf("STATUS : Output file stream established.\n");
 
-	// Write Headers to Disk
 	printf("STATUS : Writing headers (file header + DIB info header) to disk (54 bytes total)...\n");
 	fwrite(&file_header, sizeof(bitmap_file_header), 1, output_file);
 	fwrite(&info_header, sizeof(bitmap_info_header), 1, output_file);
 	printf("STATUS : Headers written successfully!\n");
 
-	// Allocate Heap Memory for Raw Input Buffer
 	printf("STATUS : Allocating heap memory for raw input buffer (%zu bytes)...\n", expected_raw_size);
 	unsigned char *raw_input_buffer = malloc(expected_raw_size);
 	if (!raw_input_buffer) {
@@ -429,7 +418,6 @@ void handle_rgb_to_bmp_conversion(void) {
 		return;
 	}
 
-	// Read Raw Pixel Stream into Memory
 	printf("STATUS : Reading raw pixel stream from disk into memory buffer...\n");
 	size_t bytes_read = fread(raw_input_buffer, 1, expected_raw_size, input_file);
 	if (bytes_read != expected_raw_size) {
@@ -441,7 +429,6 @@ void handle_rgb_to_bmp_conversion(void) {
 	}
 	printf("STATUS : Read operation complete (%zu bytes loaded).\n", bytes_read);
 
-	// Allocate Destination BMP Pixel Buffer
 	printf("STATUS : Allocating heap memory for destination BMP pixel array (%u bytes)...\n", pixel_array_size);
 	unsigned char *bmp_pixel_buffer = calloc(1, pixel_array_size); 
 	if (!bmp_pixel_buffer) {
@@ -453,10 +440,8 @@ void handle_rgb_to_bmp_conversion(void) {
 	}
 	printf("STATUS : Destination pixel buffer allocated and zero-initialized.\n");
 
-	// Run Pixel Transformation
 	convert_rgb888_to_bmp_buffer(raw_input_buffer, image_width, image_height, row_stride, bmp_pixel_buffer);
 
-	// Write Pixel Array to Disk
 	printf("STATUS : Writing finalized BMP pixel array to disk (%u bytes)...\n", pixel_array_size);
 	size_t pixels_written = fwrite(bmp_pixel_buffer, 1, pixel_array_size, output_file);
 	if (pixels_written != pixel_array_size) {
@@ -465,7 +450,6 @@ void handle_rgb_to_bmp_conversion(void) {
 		printf("STATUS : Pixel array successfully written to disk ^_^ !!!\n");
 	}
 
-	// Clean Up Resources
 	printf("STATUS : Releasing allocated heap memory and closing file streams...\n");
 	free(raw_input_buffer);
 	free(bmp_pixel_buffer);
@@ -476,6 +460,103 @@ void handle_rgb_to_bmp_conversion(void) {
 	printf("\n^_^ Conversion successfully finished! Output saved to: %s ^_^\n", output_path);
 }
 
+// feature 2 - bmp header print
+void handle_bmp_header_parsing(void) {
+	char bmp_path[256];
+	int attempts = 3;
+	int valid = 0;
+
+	printf("\n--- Feature 2: Parse and Pretty Print BMP Headers ---\n");
+
+	while (attempts > 0 && !valid) {
+		if (!read_strict_string("Enter existing .bmp file path", bmp_path, sizeof(bmp_path), attempts)) {
+			break;
+		}
+		attempts--;
+
+		if (!validate_file_extension(bmp_path, ".bmp")) {
+			printf("[ERROR] File must have a '.bmp' extension.\n");
+			continue;
+		}
+
+		FILE *test_file = fopen(bmp_path, "rb");
+		if (!test_file) {
+			printf("[ERROR] Failed to open file '%s'. Check if file exists.\n", bmp_path);
+			continue;
+		}
+		fclose(test_file);
+		valid = 1;
+	}
+
+	if (!valid) {
+		printf("[ABORT] Maximum retry attempts reached. Returning to menu.\n");
+		return;
+	}
+
+	printf("STATUS : Opening BMP file '%s' in binary read mode...\n", bmp_path);
+	FILE *bmp_file = fopen(bmp_path, "rb");
+	if (!bmp_file) {
+		perror("Failed to open BMP file");
+		return;
+	}
+
+	bitmap_file_header file_header;
+	bitmap_info_header info_header;
+
+	printf("STATUS : Reading 14-byte bitmap_file_header from disk...\n");
+	if (fread(&file_header, sizeof(bitmap_file_header), 1, bmp_file) != 1) {
+		perror("Failed to read bitmap_file_header");
+		fclose(bmp_file);
+		return;
+	}
+
+	printf("STATUS : Reading 40-byte bitmap_info_header from disk...\n");
+	if (fread(&info_header, sizeof(bitmap_info_header), 1, bmp_file) != 1) {
+		perror("Failed to read bitmap_info_header");
+		fclose(bmp_file);
+		return;
+	}
+
+	fclose(bmp_file);
+	printf("STATUS : Header structures extracted successfully.\n");
+
+	// --- PRETTY PRINTER OUTPUT WITH ANNOTATED DESCRIPTIONS ---
+	printf("\n====================================================================\n");
+	printf("                 BMP FILE METADATA INSPECTION REPORT                \n");
+	printf("====================================================================\n");
+	
+	printf("\n[1] bitmap_file_header (14 Bytes):\n");
+	printf("    - bf_type        : 0x%04X ('%c%c') [Magic Signature] %s\n", 
+		file_header.bf_type, 
+		(char)(file_header.bf_type & 0xFF), 
+		(char)(file_header.bf_type >> 8),
+		file_header.bf_type == 0x4D42 ? "[VALID]" : "[INVALID]");
+	printf("    - bf_size        : %u bytes (%u KB) [Total File Size]\n", file_header.bf_size, file_header.bf_size / 1024);
+	printf("    - bf_reserved_1  : %u [Reserved Field 1]\n", file_header.bf_reserved_1);
+	printf("    - bf_reserved_2  : %u [Reserved Field 2]\n", file_header.bf_reserved_2);
+	printf("    - bf_off_bits    : %u bytes [Pixel Data Offset]\n", file_header.bf_off_bits);
+
+	printf("\n[2] bitmap_info_header (40 Bytes - DIB Header):\n");
+	printf("    - bi_size          : %u bytes [Header Struct Size]\n", info_header.bi_size);
+	printf("    - bi_width         : %u pixels [Image Width]\n", info_header.bi_width);
+	printf("    - bi_height        : %d pixels [Image Height & Orientation] (%s)\n", 
+		info_header.bi_height, 
+		info_header.bi_height < 0 ? "Top-Down" : "Bottom-Up");
+	printf("    - bi_planes        : %u [Color Planes] (Must be 1)\n", info_header.bi_planes);
+	printf("    - bi_bit_count     : %u BPP [Bits Per Pixel / Color Depth]\n", info_header.bi_bit_count);
+	printf("    - bi_compression   : %u [Compression Scheme] (%s)\n", 
+		info_header.bi_compression, 
+		info_header.bi_compression == 0 ? "BI_RGB (Uncompressed)" : "Compressed/Bitfields");
+	printf("    - bi_size_image    : %u bytes [Pixel Array Size]\n", info_header.bi_size_image);
+	printf("    - bi_x_pels_per_meter: %u [Horizontal Print Resolution] (~%d DPI)\n", 
+		info_header.bi_x_pels_per_meter, (int)(info_header.bi_x_pels_per_meter * 0.0254 + 0.5));
+	printf("    - bi_y_pels_per_meter: %u [Vertical Print Resolution] (~%d DPI)\n", 
+		info_header.bi_y_pels_per_meter, (int)(info_header.bi_y_pels_per_meter * 0.0254 + 0.5));
+	printf("    - bi_clr_used      : %u [Palette Colors Used]\n", info_header.bi_clr_used);
+	printf("    - bi_clr_important : %u [Important Colors Count]\n", info_header.bi_clr_important);
+	printf("====================================================================\n");
+}
+
 // menu
 void run_interactive_menu(void) {
 	int choice;
@@ -483,7 +564,7 @@ void run_interactive_menu(void) {
 		print_banner();
 		printf("\nPlease select an operation:\n");
 		printf("  [1] Convert Raw RGB888 to 24-bit BMP\n");
-		printf("  [2] Parse and Print BMP Headers (Coming in Stage 2)\n");
+		printf("  [2] Parse and Print BMP Headers (Stage 2 Active!)\n");
 		printf("  [3] Validate BMP File (Coming in Stage 3)\n");
 		printf("  [4] Vertical Flip / Mirror Image (Coming in Stage 4)\n");
 		printf("  [5] Rotate / Crop Image (Coming in Stage 5)\n");
@@ -500,7 +581,8 @@ void run_interactive_menu(void) {
 		if (sscanf(buffer, "%d %s", &choice, extra) != 1) {
 			printf("[ERROR] Invalid choice format or trailing characters detected. Try again.\n");
 			printf("\nPress Enter to continue...");
-			getchar();
+			char pause_buf[256];
+			fgets(pause_buf, sizeof(pause_buf), stdin);
 			continue;
 		}
 
@@ -509,6 +591,8 @@ void run_interactive_menu(void) {
 				handle_rgb_to_bmp_conversion();
 				break;
 			case 2:
+				handle_bmp_header_parsing();
+				break;
 			case 3:
 			case 4:
 			case 5:
@@ -523,7 +607,8 @@ void run_interactive_menu(void) {
 		
 		if (choice != 0) {
 			printf("\nPress Enter to continue...");
-			getchar();
+			char pause_buf[256];
+			fgets(pause_buf, sizeof(pause_buf), stdin);
 		}
 	} while (choice != 0);
 }
