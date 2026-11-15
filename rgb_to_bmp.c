@@ -719,6 +719,184 @@ void handle_bmp_validation(void) {
 	printf("====================================================================\n");
 }
 
+// feature 4 - vertical flip
+void handle_vertical_flip(void) {
+	char input_path[256];
+	char output_path[256];
+
+	printf("\n--- Feature 4: Vertical Flip Transformation ---\n");
+
+	// 1. Input Path Validation
+	int attempts = 3;
+	int valid = 0;
+	while (attempts > 0 && !valid) {
+		if (!read_strict_string("Enter input .bmp file path", input_path, sizeof(input_path), attempts)) {
+			break;
+		}
+		attempts--;
+
+		if (!validate_file_extension(input_path, ".bmp")) {
+			printf("[ERROR] Input file must have a '.bmp' extension.\n");
+			continue;
+		}
+
+		FILE *test_file = fopen(input_path, "rb");
+		if (!test_file) {
+			printf("[ERROR] Failed to open input file '%s'.\n", input_path);
+			continue;
+		}
+		fclose(test_file);
+		valid = 1;
+	}
+	if (!valid) return;
+
+	// 2. Output Path & Overwrite Validation
+	attempts = 3;
+	valid = 0;
+	while (attempts > 0 && !valid) {
+		if (!read_strict_string("Enter output .bmp file path", output_path, sizeof(output_path), attempts)) {
+			break;
+		}
+		attempts--;
+
+		if (!validate_file_extension(output_path, ".bmp")) {
+			printf("[ERROR] Output file must have a '.bmp' extension.\n");
+			continue;
+		}
+
+		FILE *existing = fopen(output_path, "rb");
+		if (existing) {
+			fclose(existing);
+			int confirm = get_strict_overwrite_confirmation(output_path);
+			if (confirm == 1) {
+				valid = 1;
+			} else if (confirm == 0) {
+				continue;
+			} else {
+				return;
+			}
+		} else {
+			valid = 1;
+		}
+	}
+	if (!valid) return;
+
+	printf("STATUS : Opening input BMP file '%s' in binary read mode...\n", input_path);
+	FILE *input_file = fopen(input_path, "rb");
+	if (!input_file) {
+		perror("Failed to open input BMP");
+		return;
+	}
+
+	// Get exact file size on disk
+	fseek(input_file, 0, SEEK_END);
+	long disk_file_size = ftell(input_file);
+	rewind(input_file);
+
+	bitmap_file_header file_header;
+	bitmap_info_header info_header;
+
+	printf("STATUS : Reading standard 54-byte headers...\n");
+	fread(&file_header, sizeof(bitmap_file_header), 1, input_file);
+	fread(&info_header, sizeof(bitmap_info_header), 1, input_file);
+
+	if (file_header.bf_type != 0x4D42 || info_header.bi_bit_count != 24 || info_header.bi_compression != 0) {
+		fprintf(stderr, "[ERROR] Unsupported or invalid 24-bit uncompressed BMP file.\n");
+		fclose(input_file);
+		return;
+	}
+
+	// Calculate extra header bytes between 54 bytes and bf_off_bits (e.g., bitmasks, profiles)
+	long extra_header_bytes_count = (long)file_header.bf_off_bits - 54;
+	unsigned char *extra_header_buffer = NULL;
+
+	if (extra_header_bytes_count > 0) {
+		printf("STATUS : Detected %ld extra header bytes before pixel array (bf_off_bits = %u). Reading...\n", 
+			extra_header_bytes_count, file_header.bf_off_bits);
+		extra_header_buffer = malloc(extra_header_bytes_count);
+		if (!extra_header_buffer) {
+			perror("Extra header memory allocation failed");
+			fclose(input_file);
+			return;
+		}
+		fread(extra_header_buffer, 1, extra_header_bytes_count, input_file);
+	}
+
+	int width = info_header.bi_width;
+	int raw_height = info_header.bi_height;
+	int height = raw_height < 0 ? -raw_height : raw_height;
+	
+	int row_stride = ((width * 24 + 31) / 32) * 4;
+	uint32_t pixel_array_size = row_stride * height;
+
+	printf("STATUS : Stride: %d bytes/row (Width: %d, Height: %d)\n", row_stride, width, height);
+
+	unsigned char *src_pixels = malloc(pixel_array_size);
+	unsigned char *dst_pixels = calloc(1, pixel_array_size);
+
+	if (!src_pixels || !dst_pixels) {
+		perror("Memory allocation failed");
+		free(extra_header_buffer);
+		free(src_pixels);
+		free(dst_pixels);
+		fclose(input_file);
+		return;
+	}
+
+	// Seek to actual pixel offset defined by bf_off_bits
+	fseek(input_file, file_header.bf_off_bits, SEEK_SET);
+	fread(src_pixels, 1, pixel_array_size, input_file);
+	fclose(input_file);
+
+	printf("STATUS : Performing precise vertical flip with stride packing/unpacking...\n");
+	for (int y = 0; y < height; y++) {
+		int src_row = y;
+		int dst_row = height - 1 - y;
+
+		unsigned char *src_row_ptr = src_pixels + (src_row * row_stride);
+		unsigned char *dst_row_ptr = dst_pixels + (dst_row * row_stride);
+
+		for (int x = 0; x < width; x++) {
+			int pixel_offset = x * 3;
+			dst_row_ptr[pixel_offset + 0] = src_row_ptr[pixel_offset + 0]; // Blue
+			dst_row_ptr[pixel_offset + 1] = src_row_ptr[pixel_offset + 1]; // Green
+			dst_row_ptr[pixel_offset + 2] = src_row_ptr[pixel_offset + 2]; // Red
+		}
+	}
+
+	info_header.bi_height = height; // Normalize orientation
+
+	printf("STATUS : Creating output BMP file '%s'...\n", output_path);
+	FILE *output_file = fopen(output_path, "wb");
+	if (!output_file) {
+		perror("Failed to create output file");
+		free(extra_header_buffer);
+		free(src_pixels);
+		free(dst_pixels);
+		return;
+	}
+
+	// Write base headers
+	fwrite(&file_header, sizeof(bitmap_file_header), 1, output_file);
+	fwrite(&info_header, sizeof(bitmap_info_header), 1, output_file);
+
+	// Write preserved extra header bytes so bf_off_bits alignment matches perfectly
+	if (extra_header_bytes_count > 0 && extra_header_buffer != NULL) {
+		fwrite(extra_header_buffer, 1, extra_header_bytes_count, output_file);
+	}
+
+	// Write pixel array
+	fwrite(dst_pixels, 1, pixel_array_size, output_file);
+
+	fclose(output_file);
+	free(extra_header_buffer);
+	free(src_pixels);
+	free(dst_pixels);
+	printf("STATUS : Cleanup completed successfully.\n");
+
+	printf("\n[+] Vertical flip completed successfully! Saved to: %s\n", output_path);
+}
+	
 // menu 
 void run_interactive_menu(void) {
 	int choice;
@@ -759,6 +937,8 @@ void run_interactive_menu(void) {
 				handle_bmp_validation();
 				break;
 			case 4:
+				handle_vertical_flip(); 
+				break;
 			case 5:
 				printf("\n[INFO] This feature will be implemented in upcoming stages. Stay tuned!\n");
 				break;
