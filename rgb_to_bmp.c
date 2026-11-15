@@ -460,7 +460,7 @@ void handle_rgb_to_bmp_conversion(void) {
 	printf("\n^_^ Conversion successfully finished! Output saved to: %s ^_^\n", output_path);
 }
 
-// feature 2 - bmp header print
+// feature 2 - print bmp header
 void handle_bmp_header_parsing(void) {
 	char bmp_path[256];
 	int attempts = 3;
@@ -520,7 +520,6 @@ void handle_bmp_header_parsing(void) {
 	fclose(bmp_file);
 	printf("STATUS : Header structures extracted successfully.\n");
 
-	// --- PRETTY PRINTER OUTPUT WITH ANNOTATED DESCRIPTIONS ---
 	printf("\n====================================================================\n");
 	printf("                 BMP FILE METADATA INSPECTION REPORT                \n");
 	printf("====================================================================\n");
@@ -557,15 +556,178 @@ void handle_bmp_header_parsing(void) {
 	printf("====================================================================\n");
 }
 
-// menu
+// feature 3 - validate bmp header
+void handle_bmp_validation(void) {
+	char bmp_path[256];
+	int attempts = 3;
+	int valid = 0;
+
+	printf("\n--- Feature 3: Comprehensive BMP File Validator ---\n");
+
+	while (attempts > 0 && !valid) {
+		if (!read_strict_string("Enter .bmp file path to validate", bmp_path, sizeof(bmp_path), attempts)) {
+			break;
+		}
+		attempts--;
+
+		if (!validate_file_extension(bmp_path, ".bmp")) {
+			printf("[ERROR] File must have a '.bmp' extension.\n");
+			continue;
+		}
+
+		FILE *test_file = fopen(bmp_path, "rb");
+		if (!test_file) {
+			printf("[ERROR] Failed to open file '%s'. Check if file exists.\n", bmp_path);
+			continue;
+		}
+		fclose(test_file);
+		valid = 1;
+	}
+
+	if (!valid) {
+		printf("[ABORT] Maximum retry attempts reached. Returning to menu.\n");
+		return;
+	}
+
+	printf("STATUS : Opening BMP file '%s' for validation checks...\n", bmp_path);
+	FILE *bmp_file = fopen(bmp_path, "rb");
+	if (!bmp_file) {
+		perror("Failed to open BMP file");
+		return;
+	}
+
+	// Get actual file size on disk
+	if (fseek(bmp_file, 0, SEEK_END) != 0) {
+		perror("Failed to seek file");
+		fclose(bmp_file);
+		return;
+	}
+	long disk_file_size = ftell(bmp_file);
+	rewind(bmp_file);
+
+	bitmap_file_header file_header;
+	bitmap_info_header info_header;
+
+	if (fread(&file_header, sizeof(bitmap_file_header), 1, bmp_file) != 1 ||
+	    fread(&info_header, sizeof(bitmap_info_header), 1, bmp_file) != 1) {
+		fprintf(stderr, "[ERROR] File is too small to contain valid BMP headers (needs at least 54 bytes).\n");
+		fclose(bmp_file);
+		return;
+	}
+
+	fclose(bmp_file);
+	printf("STATUS : Running rigorous structural and payload integrity checks...\n");
+
+	int error_count = 0;
+	int warning_count = 0;
+
+	printf("\n====================================================================\n");
+	printf("                  BMP STRUCTURAL VALIDATION REPORT                  \n");
+	printf("====================================================================\n");
+
+	// Check 1: Magic Signature ('BM')
+	if (file_header.bf_type == 0x4D42) {
+		printf("[PASS] Magic Signature (bf_type): 0x%04X ('BM')\n", file_header.bf_type);
+	} else {
+		printf("[FAIL] Magic Signature (bf_type): 0x%04X (Expected 0x%04X / 'BM')\n", file_header.bf_type, 0x4D42);
+		error_count++;
+	}
+
+	// Check 2: DIB Header Size (Must be 40 for Windows BITMAPINFOHEADER)
+	if (info_header.bi_size == 40) {
+		printf("[PASS] DIB Header Size (bi_size): %u bytes (Standard Windows DIB)\n", info_header.bi_size);
+	} else {
+		printf("[FAIL] DIB Header Size (bi_size): %u bytes (Expected 40 bytes)\n", info_header.bi_size);
+		error_count++;
+	}
+
+	// Check 3: Color Depth (Must be 24 BPP for our True Color pipeline)
+	if (info_header.bi_bit_count == 24) {
+		printf("[PASS] Color Depth (bi_bit_count): 24 BPP (True Color RGB)\n");
+	} else {
+		printf("[FAIL] Color Depth (bi_bit_count): %u BPP (Toolkit expects 24 BPP)\n", info_header.bi_bit_count);
+		error_count++;
+	}
+
+	// Check 4: Compression Type (Must be 0 / BI_RGB)
+	if (info_header.bi_compression == 0) {
+		printf("[PASS] Compression Scheme (bi_compression): 0 (BI_RGB Uncompressed)\n");
+	} else {
+		printf("[FAIL] Compression Scheme (bi_compression): %u (Toolkit expects 0 / BI_RGB)\n", info_header.bi_compression);
+		error_count++;
+	}
+
+	// Check 5: Color Planes (Must be 1)
+	if (info_header.bi_planes == 1) {
+		printf("[PASS] Color Planes (bi_planes): 1\n");
+	} else {
+		printf("[FAIL] Color Planes (bi_planes): %u (Expected 1)\n", info_header.bi_planes);
+		error_count++;
+	}
+
+	// Check 6: Pixel Data Offset (Must be 54 for uncompressed 24-bit BMP without palette)
+	if (file_header.bf_off_bits == 54) {
+		printf("[PASS] Pixel Data Offset (bf_off_bits): 54 bytes\n");
+	} else {
+		printf("[WARN] Pixel Data Offset (bf_off_bits): %u bytes (Expected 54 bytes)\n", file_header.bf_off_bits);
+		warning_count++;
+	}
+
+	// Check 7: Image Dimensions Validation
+	int abs_height = info_header.bi_height < 0 ? -info_header.bi_height : info_header.bi_height;
+	if (info_header.bi_width > 0 && info_header.bi_height != 0) {
+		printf("[PASS] Dimensions Validation: Width = %u, Height = %d (Absolute = %d)\n", 
+			info_header.bi_width, info_header.bi_height, abs_height);
+	} else {
+		printf("[FAIL] Dimensions Validation: Width or Height are invalid (%u x %d)\n", 
+			info_header.bi_width, info_header.bi_height);
+		error_count++;
+	}
+
+	// Check 8: File Size & Payload Consistency Calculation
+	int row_stride = ((info_header.bi_width * 24 + 31) / 32) * 4;
+	uint32_t expected_pixel_array_size = row_stride * abs_height;
+	uint32_t expected_total_size = 54 + expected_pixel_array_size;
+
+	printf("    * Calculated Stride      : %d bytes/row\n", row_stride);
+	printf("    * Expected Pixel Array   : %u bytes\n", expected_pixel_array_size);
+	printf("    * Declared File Size     : %u bytes (bf_size)\n", file_header.bf_size);
+	printf("    * Actual Size on Disk    : %ld bytes\n", disk_file_size);
+
+	if (file_header.bf_size == expected_total_size) {
+		printf("[PASS] Header File Size Consistency Check passed!\n");
+	} else {
+		printf("[FAIL] Header File Size Mismatch! Declared bf_size (%u) != Expected (%u)\n", 
+			file_header.bf_size, expected_total_size);
+		error_count++;
+	}
+
+	if ((long)file_header.bf_size == disk_file_size) {
+		printf("[PASS] Disk File Size Consistency Check passed!\n");
+	} else {
+		printf("[FAIL] Disk File Size Mismatch! Declared size (%u) != Actual disk bytes (%ld)\n", 
+			file_header.bf_size, disk_file_size);
+		error_count++;
+	}
+
+	printf("--------------------------------------------------------------------\n");
+	if (error_count == 0) {
+		printf("RESULT: [SUCCESS] BMP file is fully valid and ready for processing!\n");
+	} else {
+		printf("RESULT: [FAILURE] BMP file contains %d critical error(s) and is corrupted/invalid.\n", error_count);
+	}
+	printf("====================================================================\n");
+}
+
+// menu 
 void run_interactive_menu(void) {
 	int choice;
 	do {
 		print_banner();
 		printf("\nPlease select an operation:\n");
 		printf("  [1] Convert Raw RGB888 to 24-bit BMP\n");
-		printf("  [2] Parse and Print BMP Headers (Stage 2 Active!)\n");
-		printf("  [3] Validate BMP File (Coming in Stage 3)\n");
+		printf("  [2] Parse and Print BMP Headers\n");
+		printf("  [3] Validate BMP File (Stage 3 Active!)\n");
 		printf("  [4] Vertical Flip / Mirror Image (Coming in Stage 4)\n");
 		printf("  [5] Rotate / Crop Image (Coming in Stage 5)\n");
 		printf("  [0] Exit Toolkit\n");
@@ -594,6 +756,8 @@ void run_interactive_menu(void) {
 				handle_bmp_header_parsing();
 				break;
 			case 3:
+				handle_bmp_validation();
+				break;
 			case 4:
 			case 5:
 				printf("\n[INFO] This feature will be implemented in upcoming stages. Stay tuned!\n");
