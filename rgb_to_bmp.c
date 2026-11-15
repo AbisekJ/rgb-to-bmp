@@ -1070,6 +1070,243 @@ void handle_mirror_image(void) {
 	printf("\n^_^ Mirror (horizontal flip) completed successfully! Saved to: %s ^_^\n", output_path);
 }
 
+// feature 6 - image rotation
+void handle_image_rotation(void) {
+	char input_path[256];
+	char output_path[256];
+	int angle = 0;
+	char direction_choice[16];
+	char dir_flag = 'c';
+
+	printf("\n--- Feature 6: Image Rotation (Clockwise / Anticlockwise) ---\n");
+
+	// 1. Input Path Validation
+	int attempts = 3;
+	int valid = 0;
+	while (attempts > 0 && !valid) {
+		if (!read_strict_string("Enter input .bmp file path", input_path, sizeof(input_path), attempts)) {
+			break;
+		}
+		attempts--;
+
+		if (!validate_file_extension(input_path, ".bmp")) {
+			printf("[ERROR] Input file must have a '.bmp' extension.\n");
+			continue;
+		}
+
+		FILE *test_file = fopen(input_path, "rb");
+		if (!test_file) {
+			printf("[ERROR] Failed to open input file '%s'.\n", input_path);
+			continue;
+		}
+		fclose(test_file);
+		valid = 1;
+	}
+	if (!valid) return;
+
+	// 2. Rotation Angle Validation (90, 180, or 270)
+	attempts = 3;
+	valid = 0;
+	while (attempts > 0 && !valid) {
+		if (!read_strict_int("Enter rotation angle (90, 180, or 270)", &angle, attempts)) {
+			break;
+		}
+		attempts--;
+
+		if (angle != 90 && angle != 180 && angle != 270) {
+			printf("[ERROR] Invalid angle. Rotation must be strictly 90, 180, or 270 degrees.\n");
+			continue;
+		}
+		valid = 1;
+	}
+	if (!valid) return;
+
+	// 3. Rotation Direction Validation (Clockwise 'c' or Anticlockwise 'a')
+	attempts = 3;
+	valid = 0;
+	while (attempts > 0 && !valid) {
+		if (!read_strict_string("Enter direction - Clockwise (c) or Anticlockwise (a)", direction_choice, sizeof(direction_choice), attempts)) {
+			break;
+		}
+		attempts--;
+
+		char d = direction_choice[0];
+		if ((d == 'c' || d == 'C' || d == 'a' || d == 'A') && direction_choice[1] == '\0') {
+			dir_flag = (d == 'C') ? 'c' : (d == 'A') ? 'a' : d;
+			valid = 1;
+		} else {
+			printf("[ERROR] Invalid direction. Please enter strictly 'c' for clockwise or 'a' for anticlockwise.\n");
+		}
+	}
+	if (!valid) return;
+
+	// 4. Output Path & Overwrite Validation
+	attempts = 3;
+	valid = 0;
+	while (attempts > 0 && !valid) {
+		if (!read_strict_string("Enter output .bmp file path", output_path, sizeof(output_path), attempts)) {
+			break;
+		}
+		attempts--;
+
+		if (!validate_file_extension(output_path, ".bmp")) {
+			printf("[ERROR] Output file must have a '.bmp' extension.\n");
+			continue;
+		}
+
+		FILE *existing = fopen(output_path, "rb");
+		if (existing) {
+			fclose(existing);
+			int confirm = get_strict_overwrite_confirmation(output_path);
+			if (confirm == 1) {
+				valid = 1;
+			} else if (confirm == 0) {
+				continue;
+			} else {
+				return;
+			}
+		} else {
+			valid = 1;
+		}
+	}
+	if (!valid) return;
+
+	printf("STATUS : Opening input BMP file '%s' in binary read mode...\n", input_path);
+	FILE *input_file = fopen(input_path, "rb");
+	if (!input_file) {
+		perror("Failed to open input BMP");
+		return;
+	}
+
+	fseek(input_file, 0, SEEK_END);
+	long disk_file_size = ftell(input_file);
+	rewind(input_file);
+
+	bitmap_file_header file_header;
+	bitmap_info_header info_header;
+
+	printf("STATUS : Reading 54-byte headers...\n");
+	fread(&file_header, sizeof(bitmap_file_header), 1, input_file);
+	fread(&info_header, sizeof(bitmap_info_header), 1, input_file);
+
+	if (file_header.bf_type != 0x4D42 || info_header.bi_bit_count != 24 || info_header.bi_compression != 0) {
+		fprintf(stderr, "[ERROR] Unsupported or invalid 24-bit uncompressed BMP file.\n");
+		fclose(input_file);
+		return;
+	}
+
+	// Preserve extra header bytes
+	long extra_header_bytes_count = (long)file_header.bf_off_bits - 54;
+	unsigned char *extra_header_buffer = NULL;
+	if (extra_header_bytes_count > 0) {
+		extra_header_buffer = malloc(extra_header_bytes_count);
+		if (extra_header_buffer) {
+			fread(extra_header_buffer, 1, extra_header_bytes_count, input_file);
+		}
+	}
+
+	int src_width = info_header.bi_width;
+	int raw_height = info_header.bi_height;
+	int src_height = raw_height < 0 ? -raw_height : raw_height;
+	
+	int src_row_stride = ((src_width * 24 + 31) / 32) * 4;
+	uint32_t src_pixel_array_size = src_row_stride * src_height;
+
+	unsigned char *src_pixels = malloc(src_pixel_array_size);
+	if (!src_pixels) {
+		perror("Memory allocation failed");
+		free(extra_header_buffer);
+		fclose(input_file);
+		return;
+	}
+
+	fseek(input_file, file_header.bf_off_bits, SEEK_SET);
+	fread(src_pixels, 1, src_pixel_array_size, input_file);
+	fclose(input_file);
+
+	// Determine new dimensions based on rotation angle
+	int dst_width = (angle == 180) ? src_width : src_height;
+	int dst_height = (angle == 180) ? src_height : src_width;
+
+	int dst_row_stride = ((dst_width * 24 + 31) / 32) * 4;
+	uint32_t dst_pixel_array_size = dst_row_stride * dst_height;
+
+	unsigned char *dst_pixels = calloc(1, dst_pixel_array_size);
+	if (!dst_pixels) {
+		perror("Destination memory allocation failed");
+		free(src_pixels);
+		free(extra_header_buffer);
+		return;
+	}
+
+	printf("STATUS : Executing %d-degree %s rotation transformation...\n", angle, (dir_flag == 'c') ? "Clockwise" : "Anticlockwise");
+
+	for (int y = 0; y < src_height; y++) {
+		unsigned char *src_row_ptr = src_pixels + (y * src_row_stride);
+
+		for (int x = 0; x < src_width; x++) {
+			unsigned char *src_pixel = src_row_ptr + (x * 3);
+			int dst_x = x, dst_y = y;
+
+			if (angle == 90) {
+				if (dir_flag == 'a') {
+					dst_x = src_height - 1 - y;
+					dst_y = x;
+				} else { 
+					dst_x = y;
+					dst_y = src_width - 1 - x;
+				}
+			} else if (angle == 180) {
+				// 180 degrees (same in both directions)
+				dst_x = src_width - 1 - x;
+				dst_y = src_height - 1 - y;
+			} else if (angle == 270) {
+				if (dir_flag == 'a') {
+					dst_x = y;
+					dst_y = src_width - 1 - x;
+				} else { 
+					dst_x = src_height - 1 - y;
+					dst_y = x;
+				}
+			}
+			unsigned char *dst_pixel = dst_pixels + (dst_y * dst_row_stride) + (dst_x * 3);
+			dst_pixel[0] = src_pixel[0]; // Blue
+			dst_pixel[1] = src_pixel[1]; // Green
+			dst_pixel[2] = src_pixel[2]; // Red
+		}
+	}
+
+	// Update header dimensions and sizes
+	info_header.bi_width = dst_width;
+	info_header.bi_height = dst_height;
+	info_header.bi_size_image = dst_pixel_array_size;
+	file_header.bf_size = file_header.bf_off_bits + dst_pixel_array_size;
+
+	printf("STATUS : Creating rotated output BMP file '%s'...\n", output_path);
+	FILE *output_file = fopen(output_path, "wb");
+	if (!output_file) {
+		perror("Failed to create output file");
+		free(src_pixels);
+		free(dst_pixels);
+		free(extra_header_buffer);
+		return;
+	}
+
+	fwrite(&file_header, sizeof(bitmap_file_header), 1, output_file);
+	fwrite(&info_header, sizeof(bitmap_info_header), 1, output_file);
+	if (extra_header_bytes_count > 0 && extra_header_buffer != NULL) {
+		fwrite(extra_header_buffer, 1, extra_header_bytes_count, output_file);
+	}
+	fwrite(dst_pixels, 1, dst_pixel_array_size, output_file);
+
+	fclose(output_file);
+	free(src_pixels);
+	free(dst_pixels);
+	free(extra_header_buffer);
+
+	printf("\n^_^ %d-degree %s rotation completed successfully! Saved to: %s ^_^\n", angle, (dir_flag == 'c') ? "Clockwise" : "Anticlockwise", output_path);
+}
+
 
 // menu 
 void run_interactive_menu(void) {
@@ -1082,7 +1319,7 @@ void run_interactive_menu(void) {
 		printf("  [3] Validate BMP File \n");
 		printf("  [4] Vertical Flip \n");
 		printf("  [5] Mirror Image \n");
-		printf("  [6] Rotate / Crop Image (Coming in Stage 5)\n");
+		printf("  [6] Rotate\n");
 		printf("  [0] Exit Toolkit\n");
 		printf("\nEnter your choice [0-5]: ");
 		
@@ -1116,6 +1353,9 @@ void run_interactive_menu(void) {
 				break;
 			case 5:
 				handle_mirror_image();
+				break;
+			case 6:
+				handle_image_rotation();
 				break;
 			case 0:
 				printf("\nExiting toolkit. Goodbye!\n");
