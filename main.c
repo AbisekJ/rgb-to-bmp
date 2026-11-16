@@ -74,6 +74,12 @@ void run_interactive_menu(void) {
 }
 
 int main(int argc, char *argv[]) {
+        if (argc > 2) {
+                fprintf(stderr, "ERROR : Too many arguments provided.\n");
+                fprintf(stderr, "INFO  : Use '%s --help' for usage instructions.\n", argv[0]);
+                return 1;
+        }
+
         if (argc == 2) {
                 if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
                         print_banner();
@@ -85,7 +91,13 @@ int main(int argc, char *argv[]) {
                         print_version();
                         return 0;
                 }
+                
+                // Catch-all for any unrecognized load-time arguments
+                fprintf(stderr, "ERROR : Unrecognized argument '%s'.\n", argv[1]);
+                fprintf(stderr, "INFO  : Use '%s --help' for usage instructions.\n", argv[0]);
+                return 1;
         }
+        //  END OF VALIDATION BLOCK 
 
         run_interactive_menu();
         return 0;
