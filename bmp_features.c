@@ -6,8 +6,7 @@
 #include "bmp_converter.h"
 
 // Populate standard 14-byte file header and 40-byte info header
-static void load_bmp_headers(int image_width, int image_height, size_t pixel_array_size,
-                             bitmap_file_header *file_header, bitmap_info_header *info_header) {
+static void load_bmp_headers(int image_width, int image_height, size_t pixel_array_size, bitmap_file_header *file_header, bitmap_info_header *info_header) {
         size_t header_size = sizeof(bitmap_file_header) + sizeof(bitmap_info_header);
         size_t total_file_size = header_size + pixel_array_size;
 
@@ -24,8 +23,8 @@ static void load_bmp_headers(int image_width, int image_height, size_t pixel_arr
         info_header->bi_bit_count = TARGET_BIT_COUNT;
         info_header->bi_compression = 0;
         info_header->bi_size_image = (uint32_t)pixel_array_size;
-        info_header->bi_x_pels_per_meter = 2835;
-        info_header->bi_y_pels_per_meter = 2835;
+        info_header->bi_x_pels_per_meter = 0;
+        info_header->bi_y_pels_per_meter = 0;
         info_header->bi_clr_used = 0;
         info_header->bi_clr_important = 0;
 }
@@ -320,15 +319,6 @@ void handle_bmp_header_parsing(void) {
         free(bmp_path);
         printf("STATUS : BMP file closed successfully.\n");
 
-        size_t base_header_bytes = sizeof(bitmap_file_header) + sizeof(bitmap_info_header);
-        size_t pre_pixel_gap_bytes = ((size_t)file_header.bf_off_bits > base_header_bytes)
-                                     ? ((size_t)file_header.bf_off_bits - base_header_bytes)
-                                     : 0;
-        size_t abs_w = (size_t)(info_header.bi_width < 0 ? -info_header.bi_width : info_header.bi_width);
-        size_t stride = (abs_w > 0 && is_supported_bmp_bit_count(info_header.bi_bit_count))
-                        ? calculate_row_stride(abs_w, info_header.bi_bit_count)
-                        : 0;
-
         printf("\n====================================================================\n");
         printf("                 BMP FILE METADATA INSPECTION REPORT                \n");
         printf("====================================================================\n");
@@ -337,25 +327,19 @@ void handle_bmp_header_parsing(void) {
                 file_header.bf_type, (char)(file_header.bf_type & 0xFF), (char)(file_header.bf_type >> 8),
                 file_header.bf_type == BMP_MAGIC_SIGNATURE ? "VALID" : "INVALID");
         printf("    - bf_size          : %u bytes\n", file_header.bf_size);
-        printf("    - bf_off_bits      : %u bytes (pre-pixel gap after 54B: %zu bytes)\n",
-                file_header.bf_off_bits, pre_pixel_gap_bytes);
+        printf("    - bf_off_bits      : %u bytes\n", file_header.bf_off_bits);
 
         printf("\n[2] bitmap_info_header (40 Bytes):\n");
-        printf("    - bi_size          : %u bytes\n", info_header.bi_size);
         printf("    - bi_width         : %d pixels\n", info_header.bi_width);
         printf("    - bi_height        : %d pixels (%s)\n", info_header.bi_height, info_header.bi_height < 0 ? "Top-Down" : "Bottom-Up");
         printf("    - bi_bit_count     : %u BPP\n", info_header.bi_bit_count);
         printf("    - bi_compression   : %u\n", info_header.bi_compression);
         printf("    - bi_size_image    : %u bytes\n", info_header.bi_size_image);
-        printf("    - bi_clr_used      : %u\n", info_header.bi_clr_used);
-        if (stride > 0) {
-                printf("    - row_stride       : %zu bytes\n", stride);
-        }
         printf("====================================================================\n");
         printf("STATUS : Header inspection completed successfully.\n");
 }
 
-// Feature 3: Validate BMP header fields, offsets, and file size
+// Feature 3: Validate BMP header fields, offsets, and file size across bit depths
 void handle_bmp_validation(void) {
         char *bmp_path = NULL;
         size_t attempts = DEFAULT_MAX_RETRIES;
@@ -515,7 +499,7 @@ void handle_bmp_validation(void) {
         printf("STATUS : Validation routine completed successfully.\n");
 }
 
-// Feature 4: Flip BMP image vertically across supported bit depths
+// Feature 4: Flip BMP image vertically
 void handle_vertical_flip(void) {
         char *input_path = NULL;
         char *output_path = NULL;
@@ -615,8 +599,7 @@ void handle_vertical_flip(void) {
         if (file_header.bf_type != BMP_MAGIC_SIGNATURE ||
             !is_supported_bmp_bit_count(info_header.bi_bit_count) ||
             (info_header.bi_compression != 0 && info_header.bi_compression != 3)) {
-                fprintf(stderr, "ERROR : Unsupported or invalid BMP format (BPP: %u, compression: %u).\n",
-                        info_header.bi_bit_count, info_header.bi_compression);
+                fprintf(stderr, "ERROR : Unsupported or invalid BMP file.\n");
                 fclose(input_file);
                 free(input_path);
                 free(output_path);
@@ -679,12 +662,16 @@ void handle_vertical_flip(void) {
         fclose(input_file);
         printf("STATUS : Source pixel array read into memory successfully. Input file closed.\n");
 
-        printf("STATUS : Executing vertical flip row re-ordering (%u BPP)...\n",
-               (unsigned int)info_header.bi_bit_count);
+        printf("STATUS : Executing vertical flip pixel row re-ordering...\n");
         for (size_t y = 0; y < height; y++) {
-                const unsigned char *src_row_ptr = src_pixels + (y * row_stride);
+                unsigned char *src_row_ptr = src_pixels + (y * row_stride);
                 unsigned char *dst_row_ptr = dst_pixels + ((height - 1 - y) * row_stride);
-                memcpy(dst_row_ptr, src_row_ptr, row_stride);
+                for (size_t x = 0; x < width; x++) {
+                        size_t p_offset = x * 3;
+                        dst_row_ptr[p_offset + 0] = src_row_ptr[p_offset + 0];
+                        dst_row_ptr[p_offset + 1] = src_row_ptr[p_offset + 1];
+                        dst_row_ptr[p_offset + 2] = src_row_ptr[p_offset + 2];
+                }
         }
         printf("STATUS : Vertical flip row re-ordering completed successfully.\n");
 
@@ -722,7 +709,6 @@ void handle_vertical_flip(void) {
 
         printf("\n^_^ Vertical flip completed successfully!\n");
 }
-
 
 // Feature 5: Mirror BMP image horizontally
 void handle_mirror_image(void) {
@@ -821,8 +807,10 @@ void handle_mirror_image(void) {
         }
         printf("STATUS : BMP headers read successfully.\n");
 
-        if (file_header.bf_type != BMP_MAGIC_SIGNATURE || info_header.bi_bit_count != TARGET_BIT_COUNT || info_header.bi_compression != 0) {
-                fprintf(stderr, "ERROR : Unsupported or invalid 24-bit uncompressed BMP file.\n");
+        if (file_header.bf_type != BMP_MAGIC_SIGNATURE ||
+            !is_supported_bmp_bit_count(info_header.bi_bit_count) ||
+            (info_header.bi_compression != 0 && info_header.bi_compression != 3)) {
+                fprintf(stderr, "ERROR : Unsupported or invalid BMP file.\n");
                 fclose(input_file);
                 free(input_path);
                 free(output_path);
@@ -1090,8 +1078,10 @@ void handle_image_rotation(void) {
         }
         printf("STATUS : BMP headers read successfully.\n");
 
-        if (file_header.bf_type != BMP_MAGIC_SIGNATURE || info_header.bi_bit_count != TARGET_BIT_COUNT || info_header.bi_compression != 0) {
-                fprintf(stderr, "ERROR : Unsupported or invalid 24-bit uncompressed BMP file.\n");
+        if (file_header.bf_type != BMP_MAGIC_SIGNATURE ||
+            !is_supported_bmp_bit_count(info_header.bi_bit_count) ||
+            (info_header.bi_compression != 0 && info_header.bi_compression != 3)) {
+                fprintf(stderr, "ERROR : Unsupported or invalid BMP file.\n");
                 fclose(input_file);
                 free(input_path);
                 free(output_path);
@@ -1301,8 +1291,10 @@ void handle_image_cropping(void) {
         }
         printf("STATUS : BMP headers read successfully.\n");
 
-        if (file_header.bf_type != BMP_MAGIC_SIGNATURE || info_header.bi_bit_count != TARGET_BIT_COUNT || info_header.bi_compression != 0) {
-                fprintf(stderr, "ERROR : Unsupported or invalid 24-bit uncompressed BMP file.\n");
+        if (file_header.bf_type != BMP_MAGIC_SIGNATURE ||
+            !is_supported_bmp_bit_count(info_header.bi_bit_count) ||
+            (info_header.bi_compression != 0 && info_header.bi_compression != 3)) {
+                fprintf(stderr, "ERROR : Unsupported or invalid BMP file.\n");
                 fclose(input_file);
                 free(input_path);
                 return;
