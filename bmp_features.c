@@ -514,7 +514,8 @@ void handle_bmp_validation(void) {
         printf("====================================================================\n");
         printf("STATUS : Validation routine completed successfully.\n");
 }
-// Feature 4: Flip BMP image vertically
+
+// Feature 4: Flip BMP image vertically across supported bit depths
 void handle_vertical_flip(void) {
         char *input_path = NULL;
         char *output_path = NULL;
@@ -611,8 +612,11 @@ void handle_vertical_flip(void) {
         }
         printf("STATUS : BMP headers read successfully.\n");
 
-        if (file_header.bf_type != BMP_MAGIC_SIGNATURE || info_header.bi_bit_count != TARGET_BIT_COUNT || info_header.bi_compression != 0) {
-                fprintf(stderr, "ERROR : Unsupported or invalid 24-bit uncompressed BMP file.\n");
+        if (file_header.bf_type != BMP_MAGIC_SIGNATURE ||
+            !is_supported_bmp_bit_count(info_header.bi_bit_count) ||
+            (info_header.bi_compression != 0 && info_header.bi_compression != 3)) {
+                fprintf(stderr, "ERROR : Unsupported or invalid BMP format (BPP: %u, compression: %u).\n",
+                        info_header.bi_bit_count, info_header.bi_compression);
                 fclose(input_file);
                 free(input_path);
                 free(output_path);
@@ -675,16 +679,12 @@ void handle_vertical_flip(void) {
         fclose(input_file);
         printf("STATUS : Source pixel array read into memory successfully. Input file closed.\n");
 
-        printf("STATUS : Executing vertical flip pixel row re-ordering...\n");
+        printf("STATUS : Executing vertical flip row re-ordering (%u BPP)...\n",
+               (unsigned int)info_header.bi_bit_count);
         for (size_t y = 0; y < height; y++) {
-                unsigned char *src_row_ptr = src_pixels + (y * row_stride);
+                const unsigned char *src_row_ptr = src_pixels + (y * row_stride);
                 unsigned char *dst_row_ptr = dst_pixels + ((height - 1 - y) * row_stride);
-                for (size_t x = 0; x < width; x++) {
-                        size_t p_offset = x * 3;
-                        dst_row_ptr[p_offset + 0] = src_row_ptr[p_offset + 0];
-                        dst_row_ptr[p_offset + 1] = src_row_ptr[p_offset + 1];
-                        dst_row_ptr[p_offset + 2] = src_row_ptr[p_offset + 2];
-                }
+                memcpy(dst_row_ptr, src_row_ptr, row_stride);
         }
         printf("STATUS : Vertical flip row re-ordering completed successfully.\n");
 
@@ -722,6 +722,7 @@ void handle_vertical_flip(void) {
 
         printf("\n^_^ Vertical flip completed successfully!\n");
 }
+
 
 // Feature 5: Mirror BMP image horizontally
 void handle_mirror_image(void) {
