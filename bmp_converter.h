@@ -2,15 +2,15 @@
 #define BMP_CONVERTER_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdio.h>
 
-#define BMP_MAGIC_SIGNATURE   0x4D42  // "BM"
-#define STANDARD_DIB_SIZE     40      // Windows BITMAPINFOHEADER size
-#define TARGET_BIT_COUNT      24      // True Color 24-BPP
-#define DEFAULT_MAX_RETRIES   3       // Standard strict input retry limit
-#define MAX_PATH_LENGTH       256     // Maximum string length for file paths
+#define BMP_MAGIC_SIGNATURE   0x4D42  // "BM" magic signature in little endian
+#define STANDARD_DIB_SIZE     40      // Standard Windows BITMAPINFOHEADER byte size
+#define TARGET_BIT_COUNT      24      // 24 bits per pixel RGB output
+#define DEFAULT_MAX_RETRIES   3       // Retry limit for strict prompts
 
-//  PACKED STRUCTURES 
+// Packed BMP header structures matching file layout
 #pragma pack(push, 1)
 
 typedef struct {
@@ -37,18 +37,21 @@ typedef struct {
 
 #pragma pack(pop)
 
-//  FUNCTION PROTOTYPES 
-
+// Helper and input prototypes
 int validate_file_extension(const char *filename, const char *expected_ext);
-int calculate_row_stride(int image_width);
-int read_strict_string(const char *prompt, char *out_str, int attempts_left);
-int read_strict_int(const char *prompt, int *out_val, int attempts_left);
+size_t calculate_row_stride(size_t image_width, uint16_t bit_count);
+int is_supported_bmp_bit_count(uint16_t bit_count);
+char *read_dynamic_input(const char *prompt_message);
+int read_strict_string(const char *prompt, char **out_str, size_t attempts_left);
+int read_strict_int(const char *prompt, int *out_val, size_t attempts_left);
 int get_strict_overwrite_confirmation(const char *filepath);
 
+// CLI and menu prototypes
 void print_banner(void);
 void print_help(const char *program_name);
 void print_version(void);
 
+// Image processing feature prototypes
 void handle_rgb_to_bmp_conversion(void);
 void handle_bmp_header_parsing(void);
 void handle_bmp_validation(void);
