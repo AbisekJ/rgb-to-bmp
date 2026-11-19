@@ -3,14 +3,16 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+#include <limits.h>
 #include "bmp_converter.h"
 
 // Populate standard 14-byte file header and 40-byte info header
-static void load_bmp_headers(int image_width, int image_height, size_t pixel_array_size, bitmap_file_header *file_header, bitmap_info_header *info_header) {
+static void load_bmp_headers(int image_width, int image_height, size_t pixel_array_size,
+                             bitmap_file_header *file_header, bitmap_info_header *info_header) {
         size_t header_size = sizeof(bitmap_file_header) + sizeof(bitmap_info_header);
         size_t total_file_size = header_size + pixel_array_size;
 
-        file_header->bf_type = BMP_MAGIC_SIGNATURE;
+        file_header->bf_type = (uint16_t)BMP_MAGIC_SIGNATURE;
         file_header->bf_size = (uint32_t)total_file_size;
         file_header->bf_reserved_1 = 0;
         file_header->bf_reserved_2 = 0;
@@ -19,14 +21,122 @@ static void load_bmp_headers(int image_width, int image_height, size_t pixel_arr
         info_header->bi_size = STANDARD_DIB_SIZE;
         info_header->bi_width = image_width;
         info_header->bi_height = image_height;
-        info_header->bi_planes = 1;
-        info_header->bi_bit_count = TARGET_BIT_COUNT;
-        info_header->bi_compression = 0;
+        info_header->bi_planes = (uint16_t)BMP_REQUIRED_PLANES;
+        info_header->bi_bit_count = (uint16_t)TARGET_BIT_COUNT;
+        info_header->bi_compression = BMP_BI_RGB;
         info_header->bi_size_image = (uint32_t)pixel_array_size;
         info_header->bi_x_pels_per_meter = 0;
         info_header->bi_y_pels_per_meter = 0;
         info_header->bi_clr_used = 0;
         info_header->bi_clr_important = 0;
+}
+
+// Prompt and validate an existing file path with expected extension
+static int prompt_existing_file_path(const char *prompt, const char *expected_ext,
+                                    const char *abort_msg, char **out_path) {
+        char *path = NULL;
+        size_t attempts = DEFAULT_MAX_RETRIES;
+        int valid = 0;
+
+        while (attempts > 0 && !valid) {
+                free(path);
+                path = NULL;
+                if (!read_strict_string(prompt, &path, attempts)) {
+                        break;
+                }
+                attempts--;
+                if (!validate_file_extension(path, expected_ext)) {
+                        printf("ERROR : File must have a '%s' extension.\n", expected_ext);
+                        continue;
+                }
+                FILE *test_file = fopen(path, "rb");
+                if (!test_file) {
+                        perror("ERROR : Failed to open file");
+                        continue;
+                }
+                fclose(test_file);
+                valid = 1;
+        }
+
+        if (!valid) {
+                if (abort_msg) {
+                        printf("%s\n", abort_msg);
+                }
+                free(path);
+                *out_path = NULL;
+                return 0;
+        }
+
+        *out_path = path;
+        return 1;
+}
+
+// Prompt and validate an output .bmp path, handling overwrite confirmation if needed
+static int prompt_output_bmp_path(const char *prompt, const char *abort_msg, char **out_path) {
+        char *path = NULL;
+        size_t attempts = DEFAULT_MAX_RETRIES;
+        int valid = 0;
+
+        while (attempts > 0 && !valid) {
+                free(path);
+                path = NULL;
+                if (!read_strict_string(prompt, &path, attempts)) {
+                        break;
+                }
+                attempts--;
+                if (!validate_file_extension(path, EXT_BMP)) {
+                        printf("ERROR : Output file must have a '%s' extension.\n", EXT_BMP);
+                        continue;
+                }
+                FILE *existing = fopen(path, "rb");
+                if (existing) {
+                        fclose(existing);
+                        int confirm = get_strict_overwrite_confirmation(path);
+                        if (confirm == 1) {
+                                valid = 1;
+                        } else if (confirm == 0) {
+                                printf("INFO : Overwrite declined. Please provide a different path.\n");
+                                continue;
+                        } else {
+                                free(path);
+                                *out_path = NULL;
+                                return 0;
+                        }
+                } else {
+                        valid = 1;
+                }
+        }
+
+        if (!valid) {
+                if (abort_msg) {
+                        printf("%s\n", abort_msg);
+                }
+                free(path);
+                *out_path = NULL;
+                return 0;
+        }
+
+        *out_path = path;
+        return 1;
+}
+
+// Read file and info headers and validate supported BMP format parameters
+static int read_and_validate_bmp_headers(FILE *file, bitmap_file_header *file_header,
+                                          bitmap_info_header *info_header) {
+        if (fread(file_header, sizeof(bitmap_file_header), 1, file) != 1 ||
+            fread(info_header, sizeof(bitmap_info_header), 1, file) != 1) {
+                fprintf(stderr, "ERROR : Failed to read BMP headers.\n");
+                return 0;
+        }
+
+        if (file_header->bf_type != BMP_MAGIC_SIGNATURE ||
+            !is_supported_bmp_bit_count(info_header->bi_bit_count) ||
+            (info_header->bi_compression != BMP_BI_RGB && info_header->bi_compression != BMP_BI_BITFIELDS)) {
+                fprintf(stderr, "ERROR : Unsupported or invalid BMP file.\n");
+                return 0;
+        }
+
+        return 1;
 }
 
 // Feature 1: Convert raw RGB888 file into 24-bit BMP
@@ -38,112 +148,53 @@ void handle_rgb_to_bmp_conversion(void) {
 
         printf("\n ========== Feature 1: Raw RGB888 to 24-bit BMP Conversion ========== \n");
 
-        int valid_input = 0;
-        size_t attempts = DEFAULT_MAX_RETRIES;
-        while (attempts > 0 && !valid_input) {
-                free(input_path);
-                input_path = NULL;
-                if (!read_strict_string("Enter input .rgb file path", &input_path, attempts)) {
-                        break;
-                }
-                attempts--;
-                if (!validate_file_extension(input_path, ".rgb")) {
-                        printf("ERROR : Input file must have a '.rgb' extension.\n");
-                        continue;
-                }
-                FILE *test_file = fopen(input_path, "rb");
-                if (!test_file) {
-                        perror("ERROR : Failed to open input file");
-                        continue;
-                }
-                fclose(test_file);
-                valid_input = 1;
+        if (!prompt_existing_file_path("Enter input .rgb file path", EXT_RGB,
+                                     "ABORT : Maximum retry attempts reached for input file. Returning to menu.",
+                                     &input_path)) {
+                return;
         }
-        if (!valid_input) {
-                printf("ABORT : Maximum retry attempts reached for input file. Returning to menu.\n");
+
+        if (!read_strict_int_constrained("Enter image width in pixels", &image_width,
+                                         INT_CONSTRAINT_POSITIVE,
+                                         "ABORT : Maximum retry attempts reached for image width. Returning to menu.")) {
                 free(input_path);
                 return;
         }
 
-        int valid_width = 0;
-        attempts = DEFAULT_MAX_RETRIES;
-        while (attempts > 0 && !valid_width) {
-                if (!read_strict_int("Enter image width in pixels", &image_width, attempts)) {
-                        break;
-                }
-                attempts--;
-                if (image_width <= 0) {
-                        printf("ERROR : Width (%d) must be strictly positive (> 0).\n", image_width);
-                        continue;
-                }
-                valid_width = 1;
-        }
-        if (!valid_width) {
-                printf("ABORT : Maximum retry attempts reached for image width. Returning to menu.\n");
+        if (!read_strict_int_constrained("Enter image height (+ bottom-up, - top-down)", &image_height,
+                                         INT_CONSTRAINT_NONZERO,
+                                         "ABORT : Maximum retry attempts reached for image height. Returning to menu.")) {
                 free(input_path);
                 return;
         }
 
-        int valid_height = 0;
-        attempts = DEFAULT_MAX_RETRIES;
-        while (attempts > 0 && !valid_height) {
-                if (!read_strict_int("Enter image height (+ bottom-up, - top-down)", &image_height, attempts)) {
-                        break;
-                }
-                attempts--;
-                if (image_height == 0) {
-                        printf("ERROR : Image height cannot be zero.\n");
-                        continue;
-                }
-                valid_height = 1;
-        }
-        if (!valid_height) {
-                printf("ABORT : Maximum retry attempts reached for image height. Returning to menu.\n");
+        if (!prompt_output_bmp_path("Enter output .bmp file path",
+                                    "ABORT : Maximum retry attempts reached for output file. Returning to menu.",
+                                    &output_path)) {
                 free(input_path);
-                return;
-        }
-
-        int valid_output = 0;
-        attempts = DEFAULT_MAX_RETRIES;
-        while (attempts > 0 && !valid_output) {
-                free(output_path);
-                output_path = NULL;
-                if (!read_strict_string("Enter output .bmp file path", &output_path, attempts)) {
-                        break;
-                }
-                attempts--;
-                if (!validate_file_extension(output_path, ".bmp")) {
-                        printf("ERROR : Output file must have a '.bmp' extension.\n");
-                        continue;
-                }
-                FILE *existing_file = fopen(output_path, "rb");
-                if (existing_file) {
-                        fclose(existing_file);
-                        int confirm = get_strict_overwrite_confirmation(output_path);
-                        if (confirm == 1) {
-                                valid_output = 1;
-                        } else if (confirm == 0) {
-                                printf("INFO : Overwrite declined. Please provide a different output file path.\n");
-                                continue;
-                        } else {
-                                free(input_path);
-                                free(output_path);
-                                return;
-                        }
-                } else {
-                        valid_output = 1;
-                }
-        }
-        if (!valid_output) {
-                printf("ABORT : Maximum retry attempts reached for output file. Returning to menu.\n");
-                free(input_path);
-                free(output_path);
                 return;
         }
 
         printf("STATUS : Opening raw input file '%s' in binary read mode...\n", input_path);
         size_t width_sz = (size_t)image_width;
-        size_t abs_height_sz = (size_t)(image_height < 0 ? -image_height : image_height);
+        size_t abs_height_sz = (image_height == INT_MIN)
+                               ? ((size_t)INT_MAX + 1u)
+                               : (size_t)(image_height < 0 ? -image_height : image_height);
+
+        if (width_sz > 0 && abs_height_sz > SIZE_MAX / width_sz) {
+                fprintf(stderr, "ERROR : Image dimensions overflow size_t.\n");
+                free(input_path);
+                free(output_path);
+                return;
+        }
+        size_t pixel_count = width_sz * abs_height_sz;
+        if (pixel_count > SIZE_MAX / RGB888_BYTES_PER_PIXEL) {
+                fprintf(stderr, "ERROR : Raw RGB888 buffer size overflows size_t.\n");
+                free(input_path);
+                free(output_path);
+                return;
+        }
+
         FILE *input_file = fopen(input_path, "rb");
         if (!input_file) {
                 perror("ERROR : Failed to open raw input file");
@@ -172,7 +223,7 @@ void handle_rgb_to_bmp_conversion(void) {
         }
 
         size_t actual_file_size = (size_t)raw_size_signed;
-        size_t expected_raw_size = width_sz * abs_height_sz * 3;
+        size_t expected_raw_size = pixel_count * RGB888_BYTES_PER_PIXEL;
         if (actual_file_size != expected_raw_size) {
                 fprintf(stderr, "ERROR : Input file size mismatch! Expected %zu bytes, got %zu bytes.\n",
                         expected_raw_size, actual_file_size);
@@ -183,7 +234,14 @@ void handle_rgb_to_bmp_conversion(void) {
         }
         printf("STATUS : Input file size verified successfully (%zu bytes matches dimensions).\n", actual_file_size);
 
-        size_t row_stride = calculate_row_stride(width_sz, TARGET_BIT_COUNT);
+        size_t row_stride = calculate_row_stride(width_sz, (uint16_t)TARGET_BIT_COUNT);
+        if (row_stride == 0 || (abs_height_sz > 0 && row_stride > SIZE_MAX / abs_height_sz)) {
+                fprintf(stderr, "ERROR : Row stride or pixel buffer size calculation overflowed.\n");
+                fclose(input_file);
+                free(input_path);
+                free(output_path);
+                return;
+        }
         size_t pixel_array_size = row_stride * abs_height_sz;
 
         bitmap_file_header file_header;
@@ -229,18 +287,20 @@ void handle_rgb_to_bmp_conversion(void) {
 
         printf("STATUS : Converting RGB888 pixels to BGR stride-aligned pixel array...\n");
         for (size_t y = 0; y < abs_height_sz; y++) {
-                size_t target_row_index = (image_height < 0) ? y : (abs_height_sz - 1 - y);
-                const unsigned char *input_row_ptr = raw_input_buffer + (y * width_sz * 3);
+                size_t target_row_index = (image_height < 0) ? y : (abs_height_sz - 1u - y);
+                const unsigned char *input_row_ptr = raw_input_buffer + (y * width_sz * RGB888_BYTES_PER_PIXEL);
                 unsigned char *output_row_ptr = bmp_pixel_buffer + (target_row_index * row_stride);
 
                 for (size_t x = 0; x < width_sz; x++) {
-                        unsigned char r = input_row_ptr[x * 3 + 0];
-                        unsigned char g = input_row_ptr[x * 3 + 1];
-                        unsigned char b = input_row_ptr[x * 3 + 2];
+                        size_t src_idx = x * RGB888_BYTES_PER_PIXEL;
+                        size_t dst_idx = x * BMP_PIXEL_BYTES_24BPP;
+                        unsigned char r = input_row_ptr[src_idx + 0u];
+                        unsigned char g = input_row_ptr[src_idx + 1u];
+                        unsigned char b = input_row_ptr[src_idx + 2u];
 
-                        output_row_ptr[x * 3 + 0] = b;
-                        output_row_ptr[x * 3 + 1] = g;
-                        output_row_ptr[x * 3 + 2] = r;
+                        output_row_ptr[dst_idx + 0u] = b;
+                        output_row_ptr[dst_idx + 1u] = g;
+                        output_row_ptr[dst_idx + 2u] = r;
                 }
         }
         printf("STATUS : Pixel conversion and stride alignment completed successfully.\n");
@@ -263,33 +323,11 @@ void handle_rgb_to_bmp_conversion(void) {
 // Feature 2: Read and print BMP file and info headers
 void handle_bmp_header_parsing(void) {
         char *bmp_path = NULL;
-        size_t attempts = DEFAULT_MAX_RETRIES;
-        int valid = 0;
 
         printf("\n ========== Feature 2: Parse and Print BMP Headers ========== \n");
 
-        while (attempts > 0 && !valid) {
-                free(bmp_path);
-                bmp_path = NULL;
-                if (!read_strict_string("Enter existing .bmp file path", &bmp_path, attempts)) {
-                        break;
-                }
-                attempts--;
-                if (!validate_file_extension(bmp_path, ".bmp")) {
-                        printf("ERROR : File must have a '.bmp' extension.\n");
-                        continue;
-                }
-                FILE *test_file = fopen(bmp_path, "rb");
-                if (!test_file) {
-                        perror("ERROR : Failed to open file");
-                        continue;
-                }
-                fclose(test_file);
-                valid = 1;
-        }
-        if (!valid) {
-                printf("ABORT : File path validation failed.\n");
-                free(bmp_path);
+        if (!prompt_existing_file_path("Enter existing .bmp file path", EXT_BMP,
+                                     "ABORT : File path validation failed.", &bmp_path)) {
                 return;
         }
 
@@ -324,14 +362,17 @@ void handle_bmp_header_parsing(void) {
         printf("====================================================================\n");
         printf("[1] bitmap_file_header (14 Bytes):\n");
         printf("    - bf_type          : 0x%04X ('%c%c') %s\n",
-                file_header.bf_type, (char)(file_header.bf_type & 0xFF), (char)(file_header.bf_type >> 8),
-                file_header.bf_type == BMP_MAGIC_SIGNATURE ? "VALID" : "INVALID");
+               file_header.bf_type,
+               (char)(file_header.bf_type & BYTE_MASK),
+               (char)(file_header.bf_type >> BITS_PER_BYTE),
+               file_header.bf_type == BMP_MAGIC_SIGNATURE ? "VALID" : "INVALID");
         printf("    - bf_size          : %u bytes\n", file_header.bf_size);
         printf("    - bf_off_bits      : %u bytes\n", file_header.bf_off_bits);
 
         printf("\n[2] bitmap_info_header (40 Bytes):\n");
         printf("    - bi_width         : %d pixels\n", info_header.bi_width);
-        printf("    - bi_height        : %d pixels (%s)\n", info_header.bi_height, info_header.bi_height < 0 ? "Top-Down" : "Bottom-Up");
+        printf("    - bi_height        : %d pixels (%s)\n",
+               info_header.bi_height, info_header.bi_height < 0 ? "Top-Down" : "Bottom-Up");
         printf("    - bi_bit_count     : %u BPP\n", info_header.bi_bit_count);
         printf("    - bi_compression   : %u\n", info_header.bi_compression);
         printf("    - bi_size_image    : %u bytes\n", info_header.bi_size_image);
@@ -342,33 +383,11 @@ void handle_bmp_header_parsing(void) {
 // Feature 3: Validate BMP header fields, offsets, and file size across bit depths
 void handle_bmp_validation(void) {
         char *bmp_path = NULL;
-        size_t attempts = DEFAULT_MAX_RETRIES;
-        int valid = 0;
 
         printf("\n ========== Feature 3: BMP File Validator ========== \n");
 
-        while (attempts > 0 && !valid) {
-                free(bmp_path);
-                bmp_path = NULL;
-                if (!read_strict_string("Enter .bmp file path to validate", &bmp_path, attempts)) {
-                        break;
-                }
-                attempts--;
-                if (!validate_file_extension(bmp_path, ".bmp")) {
-                        printf("ERROR : File must have a '.bmp' extension.\n");
-                        continue;
-                }
-                FILE *test_file = fopen(bmp_path, "rb");
-                if (!test_file) {
-                        perror("ERROR : Failed to open file");
-                        continue;
-                }
-                fclose(test_file);
-                valid = 1;
-        }
-        if (!valid) {
-                printf("ABORT : File path validation failed.\n");
-                free(bmp_path);
+        if (!prompt_existing_file_path("Enter .bmp file path to validate", EXT_BMP,
+                                     "ABORT : File path validation failed.", &bmp_path)) {
                 return;
         }
 
@@ -426,32 +445,37 @@ void handle_bmp_validation(void) {
                 error_count++;
         }
 
-        if (info_header.bi_size == 40 || info_header.bi_size == 108 || info_header.bi_size == 124 ||
-            info_header.bi_size == 52 || info_header.bi_size == 56) {
+        if (info_header.bi_size == STANDARD_DIB_SIZE ||
+            info_header.bi_size == BMP_V2_INFO_HEADER_SIZE ||
+            info_header.bi_size == BMP_V3_INFO_HEADER_SIZE ||
+            info_header.bi_size == BMP_V4_HEADER_SIZE ||
+            info_header.bi_size == BMP_V5_HEADER_SIZE) {
                 printf("PASS : DIB Header Size (bi_size): %u bytes (Valid Header)\n", info_header.bi_size);
         } else {
                 printf("FAIL : DIB Header Size (bi_size): %u bytes (Unsupported DIB header)\n", info_header.bi_size);
                 error_count++;
         }
 
-        if (info_header.bi_planes == 1) {
+        if (info_header.bi_planes == BMP_REQUIRED_PLANES) {
                 printf("PASS : Color Planes (bi_planes): %u\n", info_header.bi_planes);
         } else {
-                printf("FAIL : Color Planes (bi_planes): %u (Must be 1)\n", info_header.bi_planes);
+                printf("FAIL : Color Planes (bi_planes): %u (Must be %u)\n",
+                       info_header.bi_planes, BMP_REQUIRED_PLANES);
                 error_count++;
         }
 
         if (is_supported_bmp_bit_count(info_header.bi_bit_count)) {
                 printf("PASS : Color Depth (bi_bit_count): %u BPP\n", info_header.bi_bit_count);
         } else {
-                printf("FAIL : Color Depth (bi_bit_count): %u BPP (Supported: 1, 4, 8, 16, 24, 32 BPP)\n", info_header.bi_bit_count);
+                printf("FAIL : Color Depth (bi_bit_count): %u BPP (Supported: 1, 4, 8, 16, 24, 32 BPP)\n",
+                       info_header.bi_bit_count);
                 error_count++;
         }
 
-        if (info_header.bi_compression == 0 || info_header.bi_compression == 3) {
+        if (info_header.bi_compression == BMP_BI_RGB || info_header.bi_compression == BMP_BI_BITFIELDS) {
                 printf("PASS : Compression Scheme: %u (%s)\n",
                        info_header.bi_compression,
-                       info_header.bi_compression == 0 ? "BI_RGB Uncompressed" : "BI_BITFIELDS");
+                       info_header.bi_compression == BMP_BI_RGB ? "BI_RGB Uncompressed" : "BI_BITFIELDS");
         } else {
                 printf("FAIL : Compression Scheme: %u (Unsupported compression)\n", info_header.bi_compression);
                 error_count++;
@@ -462,7 +486,8 @@ void handle_bmp_validation(void) {
         if (width > 0 && info_header.bi_height != 0) {
                 printf("PASS : Dimensions Check: Width = %d, Height = %d\n", width, info_header.bi_height);
         } else {
-                printf("FAIL : Dimensions Check: Width = %d, Height = %d (Invalid dimensions)\n", width, info_header.bi_height);
+                printf("FAIL : Dimensions Check: Width = %d, Height = %d (Invalid dimensions)\n",
+                       width, info_header.bi_height);
                 error_count++;
         }
 
@@ -471,7 +496,8 @@ void handle_bmp_validation(void) {
         if (pixel_offset >= min_header_offset && pixel_offset < disk_file_size) {
                 printf("PASS : Pixel Array Offset (bf_off_bits): %u bytes\n", file_header.bf_off_bits);
         } else {
-                printf("FAIL : Pixel Array Offset (bf_off_bits): %u bytes (Invalid offset boundary)\n", file_header.bf_off_bits);
+                printf("FAIL : Pixel Array Offset (bf_off_bits): %u bytes (Invalid offset boundary)\n",
+                       file_header.bf_off_bits);
                 error_count++;
         }
 
@@ -481,7 +507,8 @@ void handle_bmp_validation(void) {
                 size_t expected_total_size = pixel_offset + expected_pixel_array_size;
 
                 if (disk_file_size >= expected_total_size) {
-                        printf("PASS : File Size Consistency: Disk size (%zu bytes) matches/exceeds structural requirements\n", disk_file_size);
+                        printf("PASS : File Size Consistency: Disk size (%zu bytes) matches/exceeds structural requirements\n",
+                               disk_file_size);
                 } else {
                         printf("FAIL : File Size Consistency: Truncated file! Expected at least %zu bytes, found %zu bytes\n",
                                expected_total_size, disk_file_size);
@@ -506,69 +533,11 @@ void handle_vertical_flip(void) {
 
         printf("\n ========== Feature 4: Vertical Flip Transformation ========== \n");
 
-        size_t attempts = DEFAULT_MAX_RETRIES;
-        int valid = 0;
-        while (attempts > 0 && !valid) {
-                free(input_path);
-                input_path = NULL;
-                if (!read_strict_string("Enter input .bmp file path", &input_path, attempts)) {
-                        free(input_path);
-                        return;
-                }
-                attempts--;
-                if (!validate_file_extension(input_path, ".bmp")) {
-                        printf("ERROR : Input file must have a '.bmp' extension.\n");
-                        continue;
-                }
-                FILE *test_file = fopen(input_path, "rb");
-                if (!test_file) {
-                        perror("ERROR : Failed to open input file");
-                        continue;
-                }
-                fclose(test_file);
-                valid = 1;
-        }
-        if (!valid) {
-                free(input_path);
+        if (!prompt_existing_file_path("Enter input .bmp file path", EXT_BMP, NULL, &input_path)) {
                 return;
         }
-
-        attempts = DEFAULT_MAX_RETRIES;
-        valid = 0;
-        while (attempts > 0 && !valid) {
-                free(output_path);
-                output_path = NULL;
-                if (!read_strict_string("Enter output .bmp file path", &output_path, attempts)) {
-                        free(input_path);
-                        free(output_path);
-                        return;
-                }
-                attempts--;
-                if (!validate_file_extension(output_path, ".bmp")) {
-                        printf("ERROR : Output file must have a '.bmp' extension.\n");
-                        continue;
-                }
-                FILE *existing = fopen(output_path, "rb");
-                if (existing) {
-                        fclose(existing);
-                        int confirm = get_strict_overwrite_confirmation(output_path);
-                        if (confirm == 1) {
-                                valid = 1;
-                        } else if (confirm == 0) {
-                                printf("INFO : Overwrite declined. Please provide a different path.\n");
-                                continue;
-                        } else {
-                                free(input_path);
-                                free(output_path);
-                                return;
-                        }
-                } else {
-                        valid = 1;
-                }
-        }
-        if (!valid) {
+        if (!prompt_output_bmp_path("Enter output .bmp file path", NULL, &output_path)) {
                 free(input_path);
-                free(output_path);
                 return;
         }
 
@@ -586,25 +555,13 @@ void handle_vertical_flip(void) {
         bitmap_info_header info_header;
 
         printf("STATUS : Reading BMP headers...\n");
-        if (fread(&file_header, sizeof(bitmap_file_header), 1, input_file) != 1 ||
-            fread(&info_header, sizeof(bitmap_info_header), 1, input_file) != 1) {
-                fprintf(stderr, "ERROR : Failed to read BMP headers.\n");
+        if (!read_and_validate_bmp_headers(input_file, &file_header, &info_header)) {
                 fclose(input_file);
                 free(input_path);
                 free(output_path);
                 return;
         }
         printf("STATUS : BMP headers read successfully.\n");
-
-        if (file_header.bf_type != BMP_MAGIC_SIGNATURE ||
-            !is_supported_bmp_bit_count(info_header.bi_bit_count) ||
-            (info_header.bi_compression != 0 && info_header.bi_compression != 3)) {
-                fprintf(stderr, "ERROR : Unsupported or invalid BMP file.\n");
-                fclose(input_file);
-                free(input_path);
-                free(output_path);
-                return;
-        }
 
         size_t base_header_bytes = sizeof(bitmap_file_header) + sizeof(bitmap_info_header);
         size_t extra_header_bytes = ((size_t)file_header.bf_off_bits > base_header_bytes)
@@ -665,12 +622,12 @@ void handle_vertical_flip(void) {
         printf("STATUS : Executing vertical flip pixel row re-ordering...\n");
         for (size_t y = 0; y < height; y++) {
                 unsigned char *src_row_ptr = src_pixels + (y * row_stride);
-                unsigned char *dst_row_ptr = dst_pixels + ((height - 1 - y) * row_stride);
+                unsigned char *dst_row_ptr = dst_pixels + ((height - 1u - y) * row_stride);
                 for (size_t x = 0; x < width; x++) {
-                        size_t p_offset = x * 3;
-                        dst_row_ptr[p_offset + 0] = src_row_ptr[p_offset + 0];
-                        dst_row_ptr[p_offset + 1] = src_row_ptr[p_offset + 1];
-                        dst_row_ptr[p_offset + 2] = src_row_ptr[p_offset + 2];
+                        size_t p_offset = x * BMP_PIXEL_BYTES_24BPP;
+                        dst_row_ptr[p_offset + 0u] = src_row_ptr[p_offset + 0u];
+                        dst_row_ptr[p_offset + 1u] = src_row_ptr[p_offset + 1u];
+                        dst_row_ptr[p_offset + 2u] = src_row_ptr[p_offset + 2u];
                 }
         }
         printf("STATUS : Vertical flip row re-ordering completed successfully.\n");
@@ -717,69 +674,11 @@ void handle_mirror_image(void) {
 
         printf("\n ========== Feature 5: Mirror / Horizontal Flip Transformation ========== \n");
 
-        size_t attempts = DEFAULT_MAX_RETRIES;
-        int valid = 0;
-        while (attempts > 0 && !valid) {
-                free(input_path);
-                input_path = NULL;
-                if (!read_strict_string("Enter input .bmp file path", &input_path, attempts)) {
-                        free(input_path);
-                        return;
-                }
-                attempts--;
-                if (!validate_file_extension(input_path, ".bmp")) {
-                        printf("ERROR : Input file must have a '.bmp' extension.\n");
-                        continue;
-                }
-                FILE *test_file = fopen(input_path, "rb");
-                if (!test_file) {
-                        perror("ERROR : Failed to open input file");
-                        continue;
-                }
-                fclose(test_file);
-                valid = 1;
-        }
-        if (!valid) {
-                free(input_path);
+        if (!prompt_existing_file_path("Enter input .bmp file path", EXT_BMP, NULL, &input_path)) {
                 return;
         }
-
-        attempts = DEFAULT_MAX_RETRIES;
-        valid = 0;
-        while (attempts > 0 && !valid) {
-                free(output_path);
-                output_path = NULL;
-                if (!read_strict_string("Enter output .bmp file path", &output_path, attempts)) {
-                        free(input_path);
-                        free(output_path);
-                        return;
-                }
-                attempts--;
-                if (!validate_file_extension(output_path, ".bmp")) {
-                        printf("ERROR : Output file must have a '.bmp' extension.\n");
-                        continue;
-                }
-                FILE *existing = fopen(output_path, "rb");
-                if (existing) {
-                        fclose(existing);
-                        int confirm = get_strict_overwrite_confirmation(output_path);
-                        if (confirm == 1) {
-                                valid = 1;
-                        } else if (confirm == 0) {
-                                printf("INFO : Overwrite declined. Please provide a different path.\n");
-                                continue;
-                        } else {
-                                free(input_path);
-                                free(output_path);
-                                return;
-                        }
-                } else {
-                        valid = 1;
-                }
-        }
-        if (!valid) {
+        if (!prompt_output_bmp_path("Enter output .bmp file path", NULL, &output_path)) {
                 free(input_path);
-                free(output_path);
                 return;
         }
 
@@ -797,25 +696,13 @@ void handle_mirror_image(void) {
         bitmap_info_header info_header;
 
         printf("STATUS : Reading BMP headers...\n");
-        if (fread(&file_header, sizeof(bitmap_file_header), 1, input_file) != 1 ||
-            fread(&info_header, sizeof(bitmap_info_header), 1, input_file) != 1) {
-                fprintf(stderr, "ERROR : Failed to read BMP headers.\n");
+        if (!read_and_validate_bmp_headers(input_file, &file_header, &info_header)) {
                 fclose(input_file);
                 free(input_path);
                 free(output_path);
                 return;
         }
         printf("STATUS : BMP headers read successfully.\n");
-
-        if (file_header.bf_type != BMP_MAGIC_SIGNATURE ||
-            !is_supported_bmp_bit_count(info_header.bi_bit_count) ||
-            (info_header.bi_compression != 0 && info_header.bi_compression != 3)) {
-                fprintf(stderr, "ERROR : Unsupported or invalid BMP file.\n");
-                fclose(input_file);
-                free(input_path);
-                free(output_path);
-                return;
-        }
 
         size_t base_header_bytes = sizeof(bitmap_file_header) + sizeof(bitmap_info_header);
         size_t extra_header_bytes = ((size_t)file_header.bf_off_bits > base_header_bytes)
@@ -878,11 +765,11 @@ void handle_mirror_image(void) {
                 unsigned char *src_row_ptr = src_pixels + (y * row_stride);
                 unsigned char *dst_row_ptr = dst_pixels + (y * row_stride);
                 for (size_t x = 0; x < width; x++) {
-                        size_t src_p = x * 3;
-                        size_t dst_p = (width - 1 - x) * 3;
-                        dst_row_ptr[dst_p + 0] = src_row_ptr[src_p + 0];
-                        dst_row_ptr[dst_p + 1] = src_row_ptr[src_p + 1];
-                        dst_row_ptr[dst_p + 2] = src_row_ptr[src_p + 2];
+                        size_t src_p = x * BMP_PIXEL_BYTES_24BPP;
+                        size_t dst_p = (width - 1u - x) * BMP_PIXEL_BYTES_24BPP;
+                        dst_row_ptr[dst_p + 0u] = src_row_ptr[src_p + 0u];
+                        dst_row_ptr[dst_p + 1u] = src_row_ptr[src_p + 1u];
+                        dst_row_ptr[dst_p + 2u] = src_row_ptr[src_p + 2u];
                 }
         }
         printf("STATUS : Mirror pixel transformation completed successfully.\n");
@@ -930,30 +817,7 @@ void handle_image_rotation(void) {
 
         printf("\n ========== Feature 6: Image Rotation (Clockwise / Anticlockwise) ========== \n");
 
-        size_t attempts = DEFAULT_MAX_RETRIES;
-        int valid = 0;
-        while (attempts > 0 && !valid) {
-                free(input_path);
-                input_path = NULL;
-                if (!read_strict_string("Enter input .bmp file path", &input_path, attempts)) {
-                        free(input_path);
-                        return;
-                }
-                attempts--;
-                if (!validate_file_extension(input_path, ".bmp")) {
-                        printf("ERROR : Input file must have a '.bmp' extension.\n");
-                        continue;
-                }
-                FILE *test_file = fopen(input_path, "rb");
-                if (!test_file) {
-                        perror("ERROR : Failed to open input file");
-                        continue;
-                }
-                fclose(test_file);
-                valid = 1;
-        }
-        if (!valid) {
-                free(input_path);
+        if (!prompt_existing_file_path("Enter input .bmp file path", EXT_BMP, NULL, &input_path)) {
                 return;
         }
 
@@ -965,16 +829,18 @@ void handle_image_rotation(void) {
                 fseek(preview_file, (long)sizeof(bitmap_file_header), SEEK_SET);
                 if (fread(&p_info, sizeof(bitmap_info_header), 1, preview_file) == 1) {
                         int p_h = p_info.bi_height < 0 ? -p_info.bi_height : p_info.bi_height;
-                        printf("INFO : Source Image Details -> Width: %d pixels, Height: %d pixels\n", p_info.bi_width, p_h);
+                        printf("INFO : Source Image Details -> Width: %d pixels, Height: %d pixels\n",
+                               p_info.bi_width, p_h);
                 }
                 fclose(preview_file);
                 printf("STATUS : Source image inspection completed successfully.\n");
         }
 
-        attempts = DEFAULT_MAX_RETRIES;
-        valid = 0;
+        size_t attempts = DEFAULT_MAX_RETRIES;
+        int valid = 0;
         while (attempts > 0 && !valid) {
-                if (!read_strict_int("Enter rotation angle (90, 180, or 270)", &angle, attempts)) {
+                if (!read_strict_int_constrained("Enter rotation angle (90, 180, or 270)", &angle,
+                                                INT_CONSTRAINT_POSITIVE, NULL)) {
                         free(input_path);
                         return;
                 }
@@ -995,9 +861,9 @@ void handle_image_rotation(void) {
         while (attempts > 0 && !valid) {
                 free(direction_choice);
                 direction_choice = NULL;
-                if (!read_strict_string("Enter direction - Clockwise (c) or Anticlockwise (a)", &direction_choice, attempts)) {
+                if (!read_strict_string("Enter direction - Clockwise (c) or Anticlockwise (a)",
+                                       &direction_choice, attempts)) {
                         free(input_path);
-                        free(direction_choice);
                         return;
                 }
                 attempts--;
@@ -1015,42 +881,8 @@ void handle_image_rotation(void) {
                 return;
         }
 
-        attempts = DEFAULT_MAX_RETRIES;
-        valid = 0;
-        while (attempts > 0 && !valid) {
-                free(output_path);
-                output_path = NULL;
-                if (!read_strict_string("Enter output .bmp file path", &output_path, attempts)) {
-                        free(input_path);
-                        free(output_path);
-                        return;
-                }
-                attempts--;
-                if (!validate_file_extension(output_path, ".bmp")) {
-                        printf("ERROR : Output file must have a '.bmp' extension.\n");
-                        continue;
-                }
-                FILE *existing = fopen(output_path, "rb");
-                if (existing) {
-                        fclose(existing);
-                        int confirm = get_strict_overwrite_confirmation(output_path);
-                        if (confirm == 1) {
-                                valid = 1;
-                        } else if (confirm == 0) {
-                                printf("INFO : Overwrite declined. Please provide a different path.\n");
-                                continue;
-                        } else {
-                                free(input_path);
-                                free(output_path);
-                                return;
-                        }
-                } else {
-                        valid = 1;
-                }
-        }
-        if (!valid) {
+        if (!prompt_output_bmp_path("Enter output .bmp file path", NULL, &output_path)) {
                 free(input_path);
-                free(output_path);
                 return;
         }
 
@@ -1068,25 +900,13 @@ void handle_image_rotation(void) {
         bitmap_info_header info_header;
 
         printf("STATUS : Reading BMP headers...\n");
-        if (fread(&file_header, sizeof(bitmap_file_header), 1, input_file) != 1 ||
-            fread(&info_header, sizeof(bitmap_info_header), 1, input_file) != 1) {
-                fprintf(stderr, "ERROR : Failed to read BMP headers.\n");
+        if (!read_and_validate_bmp_headers(input_file, &file_header, &info_header)) {
                 fclose(input_file);
                 free(input_path);
                 free(output_path);
                 return;
         }
         printf("STATUS : BMP headers read successfully.\n");
-
-        if (file_header.bf_type != BMP_MAGIC_SIGNATURE ||
-            !is_supported_bmp_bit_count(info_header.bi_bit_count) ||
-            (info_header.bi_compression != 0 && info_header.bi_compression != 3)) {
-                fprintf(stderr, "ERROR : Unsupported or invalid BMP file.\n");
-                fclose(input_file);
-                free(input_path);
-                free(output_path);
-                return;
-        }
 
         size_t base_header_bytes = sizeof(bitmap_file_header) + sizeof(bitmap_info_header);
         size_t extra_header_bytes = ((size_t)file_header.bf_off_bits > base_header_bytes)
@@ -1157,39 +977,40 @@ void handle_image_rotation(void) {
         }
         printf("STATUS : Destination memory allocated successfully.\n");
 
-        printf("STATUS : Executing %d-degree rotation (%s)...\n", angle, (dir_flag == 'c') ? "Clockwise" : "Anticlockwise");
+        printf("STATUS : Executing %d-degree rotation (%s)...\n",
+               angle, (dir_flag == 'c') ? "Clockwise" : "Anticlockwise");
         for (size_t y = 0; y < src_height; y++) {
                 unsigned char *src_row_ptr = src_pixels + (y * src_row_stride);
                 for (size_t x = 0; x < src_width; x++) {
-                        unsigned char *src_pixel = src_row_ptr + (x * 3);
+                        unsigned char *src_pixel = src_row_ptr + (x * BMP_PIXEL_BYTES_24BPP);
                         size_t dst_x = x;
                         size_t dst_y = y;
 
                         if (angle == 90) {
                                 if (dir_flag == 'a') {
-                                        dst_x = src_height - 1 - y;
+                                        dst_x = src_height - 1u - y;
                                         dst_y = x;
                                 } else {
                                         dst_x = y;
-                                        dst_y = src_width - 1 - x;
+                                        dst_y = src_width - 1u - x;
                                 }
                         } else if (angle == 180) {
-                                dst_x = src_width - 1 - x;
-                                dst_y = src_height - 1 - y;
+                                dst_x = src_width - 1u - x;
+                                dst_y = src_height - 1u - y;
                         } else if (angle == 270) {
                                 if (dir_flag == 'a') {
                                         dst_x = y;
-                                        dst_y = src_width - 1 - x;
+                                        dst_y = src_width - 1u - x;
                                 } else {
-                                        dst_x = src_height - 1 - y;
+                                        dst_x = src_height - 1u - y;
                                         dst_y = x;
                                 }
                         }
 
-                        unsigned char *dst_pixel = dst_pixels + (dst_y * dst_row_stride) + (dst_x * 3);
-                        dst_pixel[0] = src_pixel[0];
-                        dst_pixel[1] = src_pixel[1];
-                        dst_pixel[2] = src_pixel[2];
+                        unsigned char *dst_pixel = dst_pixels + (dst_y * dst_row_stride) + (dst_x * BMP_PIXEL_BYTES_24BPP);
+                        dst_pixel[0u] = src_pixel[0u];
+                        dst_pixel[1u] = src_pixel[1u];
+                        dst_pixel[2u] = src_pixel[2u];
                 }
         }
         printf("STATUS : Rotation matrix mapping completed successfully.\n");
@@ -1243,30 +1064,7 @@ void handle_image_cropping(void) {
 
         printf("\n ========== Feature 7: Bounding-Box Cropping ========== \n");
 
-        size_t attempts = DEFAULT_MAX_RETRIES;
-        int valid = 0;
-        while (attempts > 0 && !valid) {
-                free(input_path);
-                input_path = NULL;
-                if (!read_strict_string("Enter input .bmp file path", &input_path, attempts)) {
-                        free(input_path);
-                        return;
-                }
-                attempts--;
-                if (!validate_file_extension(input_path, ".bmp")) {
-                        printf("ERROR : Input file must have a '.bmp' extension.\n");
-                        continue;
-                }
-                FILE *test_file = fopen(input_path, "rb");
-                if (!test_file) {
-                        perror("ERROR : Failed to open input file");
-                        continue;
-                }
-                fclose(test_file);
-                valid = 1;
-        }
-        if (!valid) {
-                free(input_path);
+        if (!prompt_existing_file_path("Enter input .bmp file path", EXT_BMP, NULL, &input_path)) {
                 return;
         }
 
@@ -1282,23 +1080,12 @@ void handle_image_cropping(void) {
         bitmap_file_header file_header;
         bitmap_info_header info_header;
         printf("STATUS : Reading BMP headers for crop coordinate guidance...\n");
-        if (fread(&file_header, sizeof(bitmap_file_header), 1, input_file) != 1 ||
-            fread(&info_header, sizeof(bitmap_info_header), 1, input_file) != 1) {
-                fprintf(stderr, "ERROR : Failed to read BMP headers.\n");
+        if (!read_and_validate_bmp_headers(input_file, &file_header, &info_header)) {
                 fclose(input_file);
                 free(input_path);
                 return;
         }
         printf("STATUS : BMP headers read successfully.\n");
-
-        if (file_header.bf_type != BMP_MAGIC_SIGNATURE ||
-            !is_supported_bmp_bit_count(info_header.bi_bit_count) ||
-            (info_header.bi_compression != 0 && info_header.bi_compression != 3)) {
-                fprintf(stderr, "ERROR : Unsupported or invalid BMP file.\n");
-                fclose(input_file);
-                free(input_path);
-                return;
-        }
 
         int src_width = info_header.bi_width;
         int src_height = info_header.bi_height < 0 ? -info_header.bi_height : info_header.bi_height;
@@ -1308,10 +1095,11 @@ void handle_image_cropping(void) {
         printf("INFO :   - Total Width  : %d pixels (Valid X range: 0 to %d)\n", src_width, src_width - 1);
         printf("INFO :   - Total Height : %d pixels (Valid Y range: 0 to %d)\n\n", src_height, src_height - 1);
 
-        attempts = DEFAULT_MAX_RETRIES;
-        valid = 0;
+        size_t attempts = DEFAULT_MAX_RETRIES;
+        int valid = 0;
         while (attempts > 0 && !valid) {
-                if (!read_strict_int("Enter starting X coordinate", &start_x, attempts)) {
+                if (!read_strict_int_constrained("Enter starting X coordinate", &start_x,
+                                                INT_CONSTRAINT_ANY, NULL)) {
                         fclose(input_file);
                         free(input_path);
                         return;
@@ -1332,7 +1120,8 @@ void handle_image_cropping(void) {
         attempts = DEFAULT_MAX_RETRIES;
         valid = 0;
         while (attempts > 0 && !valid) {
-                if (!read_strict_int("Enter starting Y coordinate", &start_y, attempts)) {
+                if (!read_strict_int_constrained("Enter starting Y coordinate", &start_y,
+                                                INT_CONSTRAINT_ANY, NULL)) {
                         fclose(input_file);
                         free(input_path);
                         return;
@@ -1353,13 +1142,14 @@ void handle_image_cropping(void) {
         attempts = DEFAULT_MAX_RETRIES;
         valid = 0;
         while (attempts > 0 && !valid) {
-                if (!read_strict_int("Enter crop width", &crop_width, attempts)) {
+                if (!read_strict_int_constrained("Enter crop width", &crop_width,
+                                                INT_CONSTRAINT_POSITIVE, NULL)) {
                         fclose(input_file);
                         free(input_path);
                         return;
                 }
                 attempts--;
-                if (crop_width <= 0 || (start_x + crop_width) > src_width) {
+                if ((start_x + crop_width) > src_width) {
                         printf("ERROR : Invalid width. Must be > 0 and start_x + width <= %d (Max available: %d).\n",
                                src_width, src_width - start_x);
                         continue;
@@ -1375,13 +1165,14 @@ void handle_image_cropping(void) {
         attempts = DEFAULT_MAX_RETRIES;
         valid = 0;
         while (attempts > 0 && !valid) {
-                if (!read_strict_int("Enter crop height", &crop_height, attempts)) {
+                if (!read_strict_int_constrained("Enter crop height", &crop_height,
+                                                INT_CONSTRAINT_POSITIVE, NULL)) {
                         fclose(input_file);
                         free(input_path);
                         return;
                 }
                 attempts--;
-                if (crop_height <= 0 || (start_y + crop_height) > src_height) {
+                if ((start_y + crop_height) > src_height) {
                         printf("ERROR : Invalid height. Must be > 0 and start_y + height <= %d (Max available: %d).\n",
                                src_height, src_height - start_y);
                         continue;
@@ -1394,45 +1185,9 @@ void handle_image_cropping(void) {
                 return;
         }
 
-        attempts = DEFAULT_MAX_RETRIES;
-        valid = 0;
-        while (attempts > 0 && !valid) {
-                free(output_path);
-                output_path = NULL;
-                if (!read_strict_string("Enter output .bmp file path", &output_path, attempts)) {
-                        fclose(input_file);
-                        free(input_path);
-                        free(output_path);
-                        return;
-                }
-                attempts--;
-                if (!validate_file_extension(output_path, ".bmp")) {
-                        printf("ERROR : Output file must have a '.bmp' extension.\n");
-                        continue;
-                }
-                FILE *existing = fopen(output_path, "rb");
-                if (existing) {
-                        fclose(existing);
-                        int confirm = get_strict_overwrite_confirmation(output_path);
-                        if (confirm == 1) {
-                                valid = 1;
-                        } else if (confirm == 0) {
-                                printf("INFO : Overwrite declined. Please provide a different path.\n");
-                                continue;
-                        } else {
-                                fclose(input_file);
-                                free(input_path);
-                                free(output_path);
-                                return;
-                        }
-                } else {
-                        valid = 1;
-                }
-        }
-        if (!valid) {
+        if (!prompt_output_bmp_path("Enter output .bmp file path", NULL, &output_path)) {
                 fclose(input_file);
                 free(input_path);
-                free(output_path);
                 return;
         }
 
@@ -1513,11 +1268,11 @@ void handle_image_cropping(void) {
                 unsigned char *dst_row_ptr = dst_pixels + (y * dst_row_stride);
                 for (size_t x = 0; x < crop_w_sz; x++) {
                         size_t src_x = (size_t)start_x + x;
-                        unsigned char *src_pixel = src_row_ptr + (src_x * 3);
-                        unsigned char *dst_pixel = dst_row_ptr + (x * 3);
-                        dst_pixel[0] = src_pixel[0];
-                        dst_pixel[1] = src_pixel[1];
-                        dst_pixel[2] = src_pixel[2];
+                        unsigned char *src_pixel = src_row_ptr + (src_x * BMP_PIXEL_BYTES_24BPP);
+                        unsigned char *dst_pixel = dst_row_ptr + (x * BMP_PIXEL_BYTES_24BPP);
+                        dst_pixel[0u] = src_pixel[0u];
+                        dst_pixel[1u] = src_pixel[1u];
+                        dst_pixel[2u] = src_pixel[2u];
                 }
         }
         printf("STATUS : Bounding-box pixel extraction completed successfully.\n");
