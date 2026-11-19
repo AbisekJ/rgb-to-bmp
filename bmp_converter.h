@@ -5,10 +5,34 @@
 #include <stddef.h>
 #include <stdio.h>
 
-#define BMP_MAGIC_SIGNATURE   0x4D42  // "BM" magic signature in little endian
-#define STANDARD_DIB_SIZE     40      // Standard Windows BITMAPINFOHEADER byte size
-#define TARGET_BIT_COUNT      24      // 24 bits per pixel RGB output
-#define DEFAULT_MAX_RETRIES   3       // Retry limit for strict prompts
+// BMP format signatures, header sizes, and pixel constants
+#define BMP_MAGIC_SIGNATURE      0x4D42u   // "BM" magic signature in little endian
+#define STANDARD_DIB_SIZE        40u       // Standard BITMAPINFOHEADER byte size
+#define BMP_V2_INFO_HEADER_SIZE  52u       // BITMAPV2INFOHEADER byte size
+#define BMP_V3_INFO_HEADER_SIZE  56u       // BITMAPV3INFOHEADER byte size
+#define BMP_V4_HEADER_SIZE       108u      // BITMAPV4HEADER byte size
+#define BMP_V5_HEADER_SIZE       124u      // BITMAPV5HEADER byte size
+#define BMP_REQUIRED_PLANES      1u        // BMP color planes must always be 1
+#define BMP_BI_RGB               0u        // Uncompressed RGB pixel array
+#define BMP_BI_BITFIELDS         3u        // Bitfield-masked pixel array
+#define TARGET_BIT_COUNT         24u       // 24 bits per pixel RGB888 output
+#define RGB888_BYTES_PER_PIXEL   3u        // 3 bytes per pixel (R, G, B)
+#define BMP_PIXEL_BYTES_24BPP    3u        // 3 bytes per pixel in 24-bit BMP rows
+
+// Bitwise, alignment, extension, and prompt constants
+#define BYTE_MASK                0xFFu     // Mask for isolating lowest 8 bits
+#define BITS_PER_BYTE            8u        // Number of bits in one byte
+#define STRIDE_ALIGN_BITS        32u       // BMP rows align to 32 bits (4 bytes)
+#define STRIDE_ALIGN_BYTES       4u        // 4-byte row alignment boundary
+#define ASCII_CASE_OFFSET        32        // Offset between uppercase and lowercase ASCII
+#define INITIAL_INPUT_BUF_SIZE   128u      // Initial heap buffer size for dynamic input
+#define MAX_DYNAMIC_INPUT_BYTES  (16u * 1024u * 1024u) // 16 MiB cap against runaway input
+#define DEFAULT_MAX_RETRIES      3u        // Retry limit for strict prompts
+#define MENU_MIN_CHOICE          0         // Minimum valid menu option
+#define MENU_MAX_CHOICE          7         // Maximum valid menu option
+
+#define EXT_BMP                  ".bmp"    // Bitmap file extension
+#define EXT_RGB                  ".rgb"    // Raw RGB file extension
 
 // Packed BMP header structures matching file layout
 #pragma pack(push, 1)
