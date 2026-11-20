@@ -34,6 +34,12 @@
 #define EXT_BMP                  ".bmp"    // Bitmap file extension
 #define EXT_RGB                  ".rgb"    // Raw RGB file extension
 
+typedef enum {
+        INT_CONSTRAINT_ANY = 0,
+        INT_CONSTRAINT_POSITIVE,   // Must be > 0
+        INT_CONSTRAINT_NONZERO     // Must be != 0
+} int_constraint;
+
 // Packed BMP header structures matching file layout
 #pragma pack(push, 1)
 
@@ -67,7 +73,7 @@ size_t calculate_row_stride(size_t image_width, uint16_t bit_count);
 int is_supported_bmp_bit_count(uint16_t bit_count);
 char *read_dynamic_input(const char *prompt_message);
 int read_strict_string(const char *prompt, char **out_str, size_t attempts_left);
-int read_strict_int(const char *prompt, int *out_val, size_t attempts_left);
+int read_strict_int_constrained(const char *prompt, int *out_val, int_constraint constraint, const char *abort_msg);
 int get_strict_overwrite_confirmation(const char *filepath);
 
 // CLI and menu prototypes

@@ -29,8 +29,7 @@ static void free_bmp_image(bmp_image_buffer *img) {
 }
 
 // Populate standard 14-byte file header and 40-byte info header
-static void load_bmp_headers(int image_width, int image_height, size_t pixel_array_size,
-                             bitmap_file_header *file_header, bitmap_info_header *info_header) {
+static void load_bmp_headers(int image_width, int image_height, size_t pixel_array_size, bitmap_file_header *file_header, bitmap_info_header *info_header) {
         size_t header_size = sizeof(bitmap_file_header) + sizeof(bitmap_info_header);
         size_t total_file_size = header_size + pixel_array_size;
 
@@ -54,8 +53,7 @@ static void load_bmp_headers(int image_width, int image_height, size_t pixel_arr
 }
 
 // Prompt and validate an existing file path with expected extension
-static int prompt_existing_file_path(const char *prompt, const char *expected_ext,
-                                    const char *abort_msg, char **out_path) {
+static int prompt_existing_file_path(const char *prompt, const char *expected_ext, const char *abort_msg, char **out_path) {
         char *path = NULL;
         size_t attempts = DEFAULT_MAX_RETRIES;
         int valid = 0;
@@ -143,8 +141,7 @@ static int prompt_output_bmp_path(const char *prompt, const char *abort_msg, cha
 }
 
 // Read file and info headers and validate supported 24-bit transform format
-static int read_and_validate_transform_headers(FILE *file, bitmap_file_header *file_header,
-                                               bitmap_info_header *info_header) {
+static int read_and_validate_transform_headers(FILE *file, bitmap_file_header *file_header, bitmap_info_header *info_header) {
         if (fread(file_header, sizeof(bitmap_file_header), 1, file) != 1 ||
             fread(info_header, sizeof(bitmap_info_header), 1, file) != 1) {
                 fprintf(stderr, "ERROR : Failed to read BMP headers.\n");
@@ -165,15 +162,6 @@ static int read_and_validate_transform_headers(FILE *file, bitmap_file_header *f
                 fprintf(stderr, "ERROR : Only uncompressed 24-bit (BI_RGB) BMP images are supported for transformations.\n");
                 return 0;
         }
-
-/*	size_t base_header_bytes = sizeof(bitmap_file_header) + sizeof(bitmap_info_header);
-        int exceeds_long_max = (sizeof(long) < sizeof(uint64_t)) &&
-                               ((uint64_t)file_header->bf_off_bits > (uint64_t)LONG_MAX);
-        if ((size_t)file_header->bf_off_bits < base_header_bytes || exceeds_long_max) {
-                fprintf(stderr, "ERROR : Invalid pixel array offset (bf_off_bits = %u).\n",
-                        file_header->bf_off_bits);
-                return 0;
-        } */
 
         return 1;
 }
@@ -258,10 +246,8 @@ static int load_bmp_image(const char *path, bmp_image_buffer *img) {
 }
 
 // Write updated headers, optional extra header bytes, and transformed pixels to disk
-static int write_bmp_image(const char *path, const bmp_image_buffer *img,
-                           const unsigned char *out_pixels, size_t out_pixel_bytes) {
-        if (out_pixel_bytes > (size_t)UINT32_MAX ||
-            (size_t)img->file_header.bf_off_bits > (size_t)UINT32_MAX - out_pixel_bytes) {
+static int write_bmp_image(const char *path, const bmp_image_buffer *img, const unsigned char *out_pixels, size_t out_pixel_bytes) {
+        if (out_pixel_bytes > (size_t)UINT32_MAX || (size_t)img->file_header.bf_off_bits > (size_t)UINT32_MAX - out_pixel_bytes) {
                 fprintf(stderr, "ERROR : Output BMP file size exceeds 4 GiB BMP format limit.\n");
                 return 0;
         }
